@@ -9,6 +9,10 @@
 #include <unordered_set>
 #include <list>
 #include <memory>
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+#include "baseline_trace.h"
+#include <chrono>
+#endif
 
 namespace hnswlib {
 typedef unsigned int tableint;
@@ -174,6 +178,23 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         ef_ = ef;
     }
 
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+    inline dist_t traceDistance(
+        const void* left,
+        const void* right,
+        BaselineTraceCollector* trace) const {
+        if (trace == nullptr || !trace->config.collect_distance_timing) {
+            return fstdistfunc_(left, right, dist_func_param_);
+        }
+        const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+        const dist_t distance = fstdistfunc_(left, right, dist_func_param_);
+        const std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+        trace->addExactDistanceTime(static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count()));
+        return distance;
+    }
+#endif
+
 
     inline std::mutex& getLabelOpMutex(labeltype label) const {
         // calculate hash
@@ -313,7 +334,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         const void *data_point,
         size_t ef,
         BaseFilterFunctor* isIdAllowed = nullptr,
-        BaseSearchStopCondition<dist_t>* stop_condition = nullptr) const {
+        BaseSearchStopCondition<dist_t>* stop_condition = nullptr
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+        , BaselineTraceCollector* trace = nullptr
+#endif
+        ) const {
         VisitedList *vl = visited_list_pool_->getFreeVisitedList();
         vl_type *visited_array = vl->mass;
         vl_type visited_array_tag = vl->curV;
@@ -325,7 +350,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         if (bare_bone_search || 
             (!isMarkedDeleted(ep_id) && ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(ep_id))))) {
             char* ep_data = getDataByInternalId(ep_id);
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+            dist_t dist = trace != nullptr ? traceDistance(data_point, ep_data, trace) :
+                fstdistfunc_(data_point, ep_data, dist_func_param_);
+            if (trace != nullptr) ++trace->summary.n_base_entry_distance;
+#else
             dist_t dist = fstdistfunc_(data_point, ep_data, dist_func_param_);
+#endif
             lowerBound = dist;
             top_candidates.emplace(dist, ep_id);
             if (!bare_bone_search && stop_condition) {
@@ -359,8 +390,19 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             candidate_set.pop();
 
             tableint current_node_id = current_node_pair.second;
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+            uint64_t trace_expansion_index = 0;
+            if (trace != nullptr) {
+                trace_expansion_index = trace->summary.n_expanded;
+                ++trace->summary.n_expanded;
+                trace->markExpanded(current_node_id);
+            }
+#endif
             int *data = (int *) get_linklist0(current_node_id);
             size_t size = getListCount((linklistsizeint*)data);
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+            if (trace != nullptr) trace->summary.n_edge_scan += size;
+#endif
 //                bool cur_node_deleted = isMarkedDeleted(current_node_id);
             if (collect_metrics) {
                 metric_hops++;
@@ -385,8 +427,38 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 if (!(visited_array[candidate_id] == visited_array_tag)) {
                     visited_array[candidate_id] = visited_array_tag;
 
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+                    BaselineDcoRecord trace_record;
+                    bool trace_sampled = false;
+                    if (trace != nullptr) {
+                        ++trace->summary.n_unique_neighbor;
+                        ++trace->summary.n_dist;
+                        trace_record.query_id = trace->config.query_id;
+                        trace_record.graph_layer = 0;
+                        trace_record.expansion_index = trace_expansion_index;
+                        trace_record.dco_index = trace->summary.n_dist - 1;
+                        trace_record.current_node_id = current_node_id;
+                        trace_record.current_node_label = static_cast<uint64_t>(getExternalLabel(current_node_id));
+                        trace_record.neighbor_id = candidate_id;
+                        trace_record.neighbor_label = static_cast<uint64_t>(getExternalLabel(candidate_id));
+                        trace_record.dist_qc = static_cast<double>(candidate_dist);
+                        trace_record.threshold_before = static_cast<double>(lowerBound);
+                        trace_record.threshold_valid_before = top_candidates.size() >= ef;
+                        trace_record.candidate_queue_size_before = candidate_set.size();
+                        trace_record.result_queue_size_before = top_candidates.size();
+                        trace_sampled = trace->shouldSampleDco(trace_record.dco_index);
+                        trace->registerEvaluation(candidate_id);
+                    }
+#endif
+
                     char *currObj1 = (getDataByInternalId(candidate_id));
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+                    dist_t dist = trace != nullptr ? traceDistance(data_point, currObj1, trace) :
+                        fstdistfunc_(data_point, currObj1, dist_func_param_);
+                    if (trace != nullptr) trace_record.dist_qd = static_cast<double>(dist);
+#else
                     dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);
+#endif
 
                     bool flag_consider_candidate;
                     if (!bare_bone_search && stop_condition) {
@@ -397,6 +469,12 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
                     if (flag_consider_candidate) {
                         candidate_set.emplace(-dist, candidate_id);
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+                        if (trace != nullptr) {
+                            trace_record.inserted_candidate_queue = true;
+                            ++trace->summary.n_inserted_candidate;
+                        }
+#endif
 #ifdef USE_SSE
                         _mm_prefetch(data_level0_memory_ + candidate_set.top().second * size_data_per_element_ +
                                         offsetLevel0_,  ///////////
@@ -406,6 +484,12 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         if (bare_bone_search || 
                             (!isMarkedDeleted(candidate_id) && ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(candidate_id))))) {
                             top_candidates.emplace(dist, candidate_id);
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+                            if (trace != nullptr) {
+                                trace_record.inserted_result_queue = true;
+                                ++trace->summary.n_inserted_result;
+                            }
+#endif
                             if (!bare_bone_search && stop_condition) {
                                 stop_condition->add_point_to_result(getExternalLabel(candidate_id), currObj1, dist);
                             }
@@ -431,6 +515,40 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         if (!top_candidates.empty())
                             lowerBound = top_candidates.top().first;
                     }
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+                    if (trace != nullptr) {
+                        trace_record.candidate_queue_size_after = candidate_set.size();
+                        trace_record.result_queue_size_after = top_candidates.size();
+                        trace_record.threshold_after = static_cast<double>(lowerBound);
+                        trace_record.threshold_valid_after = top_candidates.size() >= ef;
+                        trace_record.threshold_changed =
+                            (!trace_record.threshold_valid_before && trace_record.threshold_valid_after) ||
+                            (trace_record.threshold_valid_before && trace_record.threshold_valid_after &&
+                             trace_record.threshold_before != trace_record.threshold_after);
+                        if (trace_record.threshold_changed) ++trace->summary.n_threshold_changed;
+                        if (!trace_record.inserted_candidate_queue) ++trace->summary.n_strict_state_neutral;
+
+                        if (trace_record.threshold_valid_before) {
+                            trace_record.absolute_margin = trace_record.dist_qd - trace_record.threshold_before;
+                            trace_record.relative_margin = trace_record.absolute_margin /
+                                std::max(std::fabs(trace_record.threshold_before), trace->config.epsilon);
+                            trace_record.is_negative_at_evaluation = trace_record.dist_qd > trace_record.threshold_before;
+                        }
+                        trace->recordThreshold(trace_record.threshold_valid_after, trace_record.threshold_after);
+                        if (trace_sampled) {
+                            trace->computeFloatL2Geometry(
+                                data_point,
+                                getDataByInternalId(current_node_id),
+                                currObj1,
+                                trace_record);
+                            trace->appendRecord(trace_record);
+                        }
+                    }
+#endif
+                } else {
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+                    if (trace != nullptr) ++trace->summary.n_duplicate;
+#endif
                 }
             }
         }
@@ -1267,12 +1385,37 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
 
     std::priority_queue<std::pair<dist_t, labeltype >>
-    searchKnn(const void *query_data, size_t k, BaseFilterFunctor* isIdAllowed = nullptr) const {
+    searchKnnInternal(
+        const void *query_data,
+        size_t k,
+        BaseFilterFunctor* isIdAllowed
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+        , BaselineTraceCollector* trace
+#endif
+        ) const {
         std::priority_queue<std::pair<dist_t, labeltype >> result;
-        if (cur_element_count == 0) return result;
+        if (cur_element_count == 0) {
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+            if (trace != nullptr) trace->finalize();
+#endif
+            return result;
+        }
+
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+        if (trace != nullptr) {
+            trace->summary.ef_effective = std::max(ef_, k);
+        }
+#endif
 
         tableint currObj = enterpoint_node_;
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+        dist_t curdist = trace != nullptr ?
+            traceDistance(query_data, getDataByInternalId(enterpoint_node_), trace) :
+            fstdistfunc_(query_data, getDataByInternalId(enterpoint_node_), dist_func_param_);
+        if (trace != nullptr) ++trace->summary.n_entry_distance;
+#else
         dist_t curdist = fstdistfunc_(query_data, getDataByInternalId(enterpoint_node_), dist_func_param_);
+#endif
 
         for (int level = maxlevel_; level > 0; level--) {
             bool changed = true;
@@ -1284,13 +1427,23 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 int size = getListCount(data);
                 metric_hops++;
                 metric_distance_computations+=size;
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+                if (trace != nullptr) trace->summary.n_upper_edge_scan += size;
+#endif
 
                 tableint *datal = (tableint *) (data + 1);
                 for (int i = 0; i < size; i++) {
                     tableint cand = datal[i];
                     if (cand < 0 || cand > max_elements_)
                         throw std::runtime_error("cand error");
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+                    dist_t d = trace != nullptr ?
+                        traceDistance(query_data, getDataByInternalId(cand), trace) :
+                        fstdistfunc_(query_data, getDataByInternalId(cand), dist_func_param_);
+                    if (trace != nullptr) ++trace->summary.n_upper_dist;
+#else
                     dist_t d = fstdistfunc_(query_data, getDataByInternalId(cand), dist_func_param_);
+#endif
 
                     if (d < curdist) {
                         curdist = d;
@@ -1304,11 +1457,21 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
         bool bare_bone_search = !num_deleted_ && !isIdAllowed;
         if (bare_bone_search) {
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+            top_candidates = searchBaseLayerST<true>(
+                    currObj, query_data, std::max(ef_, k), isIdAllowed, nullptr, trace);
+#else
             top_candidates = searchBaseLayerST<true>(
                     currObj, query_data, std::max(ef_, k), isIdAllowed);
+#endif
         } else {
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+            top_candidates = searchBaseLayerST<false>(
+                    currObj, query_data, std::max(ef_, k), isIdAllowed, nullptr, trace);
+#else
             top_candidates = searchBaseLayerST<false>(
                     currObj, query_data, std::max(ef_, k), isIdAllowed);
+#endif
         }
 
         while (top_candidates.size() > k) {
@@ -1316,11 +1479,50 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         }
         while (top_candidates.size() > 0) {
             std::pair<dist_t, tableint> rez = top_candidates.top();
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+            if (trace != nullptr) trace->markFinalTopK(rez.second);
+#endif
             result.push(std::pair<dist_t, labeltype>(rez.first, getExternalLabel(rez.second)));
             top_candidates.pop();
         }
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+        if (trace != nullptr) trace->finalize();
+#endif
         return result;
     }
+
+
+    std::priority_queue<std::pair<dist_t, labeltype >>
+    searchKnn(const void *query_data, size_t k, BaseFilterFunctor* isIdAllowed = nullptr) const {
+        return searchKnnInternal(
+            query_data,
+            k,
+            isIdAllowed
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+            , nullptr
+#endif
+        );
+    }
+
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+    std::priority_queue<std::pair<dist_t, labeltype >>
+    searchKnnWithTrace(
+        const void *query_data,
+        size_t k,
+        BaselineTraceCollector& trace,
+        BaseFilterFunctor* isIdAllowed = nullptr) const {
+        trace.config.requested_k = k;
+        trace.config.ef_search = ef_;
+        trace.beginQuery();
+        const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+        std::priority_queue<std::pair<dist_t, labeltype >> result =
+            searchKnnInternal(query_data, k, isIdAllowed, &trace);
+        const std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+        trace.summary.trace_query_latency_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
+        return result;
+    }
+#endif
 
 
     std::vector<std::pair<dist_t, labeltype >>
