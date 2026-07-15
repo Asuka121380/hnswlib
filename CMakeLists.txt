@@ -112,6 +112,9 @@ if(HNSWLIB_EXAMPLES)
     add_executable(main tests/cpp/main.cpp tests/cpp/sift_1b.cpp)
     target_link_libraries(main hnswlib)
 
+    add_executable(real_data_trace_runner examples/cpp/real_data_trace_runner.cpp)
+    target_link_libraries(real_data_trace_runner hnswlib)
+
     if(HNSWLIB_ENABLE_BASELINE_TRACE)
       add_executable(baseline_trace_runner examples/cpp/baseline_trace_runner.cpp)
       target_link_libraries(baseline_trace_runner hnswlib)

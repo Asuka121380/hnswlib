@@ -1,0 +1,18 @@
+{
+  "dataset": "sift1m",
+  "k": 10,
+  "M": 16,
+  "ef_construction": 200,
+  "ef_search_values": [50, 100, 200, 400],
+  "seed": 42,
+  "query_start": 0,
+  "query_count": 10000,
+  "trace_shards": 20,
+  "dco_sample_modulus": 10,
+  "edge_samples_per_shard": 256,
+  "pilot_query_count": 100,
+  "correctness_query_count": 10,
+  "storage_budget_gb": 60,
+  "performance_repeats": 5,
+  "warmup_queries": 100
+}

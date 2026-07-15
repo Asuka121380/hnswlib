@@ -128,7 +128,13 @@ class BaselineTraceCollector {
 
     bool shouldSampleDco(uint64_t dco_index) const {
         const size_t modulus = config.dco_sample_modulus == 0 ? 1 : config.dco_sample_modulus;
-        return (dco_index % modulus) == (config.dco_sample_remainder % modulus);
+        uint64_t value = config.seed ^ (config.query_id + 0x9e3779b97f4a7c15ULL);
+        value ^= dco_index + 0x9e3779b97f4a7c15ULL + (value << 6) + (value >> 2);
+        value += 0x9e3779b97f4a7c15ULL;
+        value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+        value ^= value >> 31;
+        return (value % modulus) == (config.dco_sample_remainder % modulus);
     }
 
     void registerEvaluation(uint32_t neighbor_id) {
