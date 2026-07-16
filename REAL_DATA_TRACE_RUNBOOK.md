@@ -123,6 +123,35 @@ Trace-disabled performance results are under:
 <run-root>/performance/ef<value>/performance.csv
 ```
 
+After every per-`efSearch` analysis and performance job succeeds, the final summary job writes:
+
+```text
+<run-root>/summary/
+  summary.csv
+  summary.json
+  report.md
+  plots/
+```
+
+For a completed run created before the summary job was added, submit it independently:
+
+```bash
+cd ~/IndividualProject/src/hnswlib
+RUN_ROOT="$HOME/IndividualProject/results/baseline_trace/<run-id>"
+PYTHON_ENV="$HOME/IndividualProject/envs/baseline-trace-py312-v2"
+
+SUMMARY_JOB=$(sbatch --parsable \
+  --output="$RUN_ROOT/logs/summary_%j.out" \
+  --error="$RUN_ROOT/logs/summary_%j.err" \
+  --export="ALL,REPO_ROOT=$PWD,RUN_ROOT=$RUN_ROOT,PYTHON_ENV=$PYTHON_ENV" \
+  scripts/baseline_trace/slurm/summarize_experiment.slurm)
+
+echo "SUMMARY_JOB=$SUMMARY_JOB"
+```
+
+This job reads only the small per-configuration `metrics.json` and `performance.csv` files. It does not
+rescan or modify raw trace shards and aggregated Parquet files.
+
 The first complete experiment is operationally successful only when all build, dataset, index, correctness, capacity, trace-array, aggregation, analysis, and performance jobs complete with exit code `0:0`.
 
 ## 5. Safety and reproducibility

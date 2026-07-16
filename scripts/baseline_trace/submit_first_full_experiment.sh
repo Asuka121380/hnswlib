@@ -104,6 +104,7 @@ CAPACITY_JOB=$(submit capacity --dependency="afterok:$PILOT_JOB" \
   "$REPO_ROOT/scripts/baseline_trace/slurm/capacity_gate.slurm")
 
 ARRAY_MAX=$((TRACE_SHARDS - 1))
+SUMMARY_DEPENDENCIES=""
 for EF_SEARCH in $EF_SEARCH_VALUES; do
   EF_DIR="$RUN_ROOT/ef$EF_SEARCH"
   mkdir -p "$EF_DIR/raw/shards"
@@ -111,16 +112,22 @@ for EF_SEARCH in $EF_SEARCH_VALUES; do
     --array="0-$ARRAY_MAX" \
     --export="$COMMON_EXPORT,RUN_DIR=$EF_DIR,EF_SEARCH=$EF_SEARCH" \
     "$REPO_ROOT/scripts/baseline_trace/slurm/collect_trace_array.slurm")
-  submit analyze_ef$EF_SEARCH --dependency="afterok:$TRACE_JOB" \
+  ANALYZE_JOB=$(submit analyze_ef$EF_SEARCH --dependency="afterok:$TRACE_JOB" \
     --export="$COMMON_EXPORT,RUN_DIR=$EF_DIR,EF_SEARCH=$EF_SEARCH" \
-    "$REPO_ROOT/scripts/baseline_trace/slurm/aggregate_analyze.slurm" >/dev/null
-  submit performance_ef$EF_SEARCH --dependency="afterok:$CORRECT_JOB" \
+    "$REPO_ROOT/scripts/baseline_trace/slurm/aggregate_analyze.slurm")
+  PERFORMANCE_JOB=$(submit performance_ef$EF_SEARCH --dependency="afterok:$CORRECT_JOB" \
     --export="$COMMON_EXPORT,RUN_DIR=$RUN_ROOT,EF_SEARCH=$EF_SEARCH" \
-    "$REPO_ROOT/scripts/baseline_trace/slurm/performance_baseline.slurm" >/dev/null
+    "$REPO_ROOT/scripts/baseline_trace/slurm/performance_baseline.slurm")
+  SUMMARY_DEPENDENCIES="${SUMMARY_DEPENDENCIES}:$ANALYZE_JOB:$PERFORMANCE_JOB"
 done
+
+SUMMARY_JOB=$(submit summary --dependency="afterok:${SUMMARY_DEPENDENCIES#:}" \
+  --export="$COMMON_EXPORT,RUN_ROOT=$RUN_ROOT" \
+  "$REPO_ROOT/scripts/baseline_trace/slurm/summarize_experiment.slurm")
 
 echo "first_full_experiment_submitted"
 echo "run_id=$RUN_ID"
 echo "run_root=$RUN_ROOT"
+echo "summary_job=$SUMMARY_JOB"
 echo "monitor: squeue -u $USER"
 echo "jobs: $RUN_ROOT/submitted_jobs.txt"
