@@ -15,5 +15,6 @@ set -euo pipefail
 source "$PYTHON_ENV/bin/activate"
 python "$REPO_ROOT/scripts/baseline_trace/estimate_trace_capacity.py" \
   --pilot-dir "$RUN_DIR/pilot" --target-queries "$QUERY_COUNT" \
+  --configuration-count "$EF_SEARCH_COUNT" \
   --budget-gb "$STORAGE_BUDGET_GB" --output "$RUN_DIR/capacity.json"
 echo "capacity_gate_ok"

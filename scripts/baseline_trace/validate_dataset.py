@@ -6,27 +6,50 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import mmap
 from pathlib import Path
 import struct
 
 
-def inspect(path: Path, component_bytes: int, expected_dimension: int, expected_count: int) -> None:
+SUPPORTED_FORMATS = {"fvecs": 4, "bvecs": 1, "ivecs": 4}
+
+
+def inspect(path: Path, vector_format: str, expected_dimension: int, expected_count: int) -> None:
     if not path.is_file():
         raise RuntimeError(f"Missing file: {path}")
-    with path.open("rb") as handle:
-        raw = handle.read(4)
-    if len(raw) != 4:
-        raise RuntimeError(f"Empty file: {path}")
-    dimension = struct.unpack("<i", raw)[0]
-    if dimension != expected_dimension:
-        raise RuntimeError(f"Dimension mismatch for {path}: {dimension} != {expected_dimension}")
-    record_bytes = 4 + dimension * component_bytes
+    if vector_format not in SUPPORTED_FORMATS:
+        raise RuntimeError(f"Unsupported vector format {vector_format!r} for {path}")
+    component_bytes = SUPPORTED_FORMATS[vector_format]
     size = path.stat().st_size
+    if size < 4:
+        raise RuntimeError(f"Empty file: {path}")
+    record_bytes = 4 + expected_dimension * component_bytes
     if size % record_bytes:
         raise RuntimeError(f"Malformed file size: {path}")
     count = size // record_bytes
     if count != expected_count:
         raise RuntimeError(f"Count mismatch for {path}: {count} != {expected_count}")
+    with path.open("rb") as handle, mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
+        for row in range(expected_count):
+            dimension = struct.unpack_from("<i", data, row * record_bytes)[0]
+            if dimension != expected_dimension:
+                raise RuntimeError(
+                    f"Dimension mismatch for {path} at record {row}: "
+                    f"{dimension} != {expected_dimension}"
+                )
+
+
+def validate_ground_truth_labels(path: Path, ground_truth_k: int, n_query: int, n_base: int) -> None:
+    record_bytes = 4 + ground_truth_k * 4
+    with path.open("rb") as handle, mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
+        for row in range(n_query):
+            offset = row * record_bytes + 4
+            labels = struct.unpack_from(f"<{ground_truth_k}i", data, offset)
+            for column, label in enumerate(labels):
+                if label < 0 or label >= n_base:
+                    raise RuntimeError(
+                        f"Ground-truth label out of range at query {row}, column {column}: {label}"
+                    )
 
 
 def main() -> None:
@@ -34,11 +57,22 @@ def main() -> None:
     parser.add_argument("--dataset-config", required=True, type=Path)
     args = parser.parse_args()
     config = json.loads(args.dataset_config.read_text(encoding="utf-8"))
-    base_bytes = 4 if config["base_format"] == "fvecs" else 1
-    query_bytes = 4 if config["query_format"] == "fvecs" else 1
-    inspect(Path(config["base_path"]), base_bytes, config["dimension"], config["n_base"])
-    inspect(Path(config["query_path"]), query_bytes, config["dimension"], config["n_query"])
-    inspect(Path(config["ground_truth_path"]), 4, config["ground_truth_k"], config["n_query"])
+    if config.get("distance_kind") != "squared_l2_float32":
+        raise RuntimeError(f"Unsupported distance_kind: {config.get('distance_kind')!r}")
+    inspect(Path(config["base_path"]), config["base_format"], config["dimension"], config["n_base"])
+    inspect(Path(config["query_path"]), config["query_format"], config["dimension"], config["n_query"])
+    inspect(
+        Path(config["ground_truth_path"]),
+        config["ground_truth_format"],
+        config["ground_truth_k"],
+        config["n_query"],
+    )
+    validate_ground_truth_labels(
+        Path(config["ground_truth_path"]),
+        config["ground_truth_k"],
+        config["n_query"],
+        config["n_base"],
+    )
     checksums = config.get("checksums", {})
     for key, path_key in (
         ("base_sha256", "base_path"),

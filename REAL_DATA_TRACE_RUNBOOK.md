@@ -162,3 +162,65 @@ The first complete experiment is operationally successful only when all build, d
 - Array tasks write temporary shard directories and rename them only after completion.
 - Full experiment work remains on compute nodes and uses `--hint=nomultithread`.
 - Keep all logs and the resolved configuration stored under the run root.
+
+## 6. Prepare and submit GIST1M
+
+GIST1M is the high-dimensional follow-up experiment. It uses the same native `fvecs`/`ivecs`
+formats and squared-L2 runner as SIFT1M, but contains 1,000,000 base vectors at 960 dimensions and
+1,000 standard queries.
+
+Submit download, extraction, structural validation, label validation, and checksum generation to
+WEIRDO:
+
+```bash
+cd ~/IndividualProject/src/hnswlib
+
+GIST_PREP_JOB=$(sbatch --parsable \
+  --output="$HOME/IndividualProject/logs/gist1m_prepare_%j.out" \
+  --error="$HOME/IndividualProject/logs/gist1m_prepare_%j.err" \
+  --export="ALL,REPO_ROOT=$PWD,DATASET_DIR=$HOME/IndividualProject/datasets/gist1m" \
+  scripts/baseline_trace/slurm/prepare_gist1m.slurm)
+
+echo "$GIST_PREP_JOB"
+```
+
+Do not continue unless the job exits with `0:0` and prints `prepare_gist1m_ok`. Revalidate the
+generated manifest independently:
+
+```bash
+source ~/IndividualProject/envs/baseline-trace-py312-v2/bin/activate
+python scripts/baseline_trace/validate_dataset.py \
+  --dataset-config "$HOME/IndividualProject/datasets/gist1m/dataset.json"
+```
+
+Before formal submission, require a clean, pushed repository state. The submission tool rejects a
+dirty worktree.
+
+```bash
+git status --short
+git rev-parse HEAD
+
+bash scripts/baseline_trace/submit_first_full_experiment.sh \
+  --dataset-config "$HOME/IndividualProject/datasets/gist1m/dataset.json" \
+  --experiment-config configs/baseline_trace/experiments/gist1m_first_full.json
+```
+
+The initial GIST1M configuration uses all 1,000 independent queries, 20 shards, and a 50-query
+maximum-`efSearch` pilot. Do not repeat queries to emulate the 10,000-query SIFT1M workload. Accept
+the complete trace matrix only after the capacity job confirms that projected storage is within both
+the configured budget and the actual remaining quota.
+
+After both dataset summaries have metric schema version 2, generate the cross-dataset comparison:
+
+```bash
+SIFT_RUN_ROOT="$HOME/IndividualProject/results/baseline_trace/sift1m-first-full-20260716"
+GIST_RUN_ROOT="$HOME/IndividualProject/results/baseline_trace/<gist-run-id>"
+OUTPUT_DIR="$HOME/IndividualProject/results/baseline_trace/sift1m-gist1m-comparison"
+
+sbatch \
+  --export="ALL,REPO_ROOT=$PWD,SIFT_RUN_ROOT=$SIFT_RUN_ROOT,GIST_RUN_ROOT=$GIST_RUN_ROOT,OUTPUT_DIR=$OUTPUT_DIR,PYTHON_ENV=$HOME/IndividualProject/envs/baseline-trace-py312-v2" \
+  scripts/baseline_trace/slurm/compare_datasets.slurm
+```
+
+Legacy SIFT1M metrics must be regenerated with the corrected valid-neutral margin denominator before
+the comparison script will accept them.
