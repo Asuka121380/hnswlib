@@ -14,6 +14,6 @@
   "faiss_version": "1.14.3",
   "faiss_source_commit": "0ca9df4792b173d573044ee14ca0704780176e82",
   "selected_codebook_sha256": "6b79abd305a82c61ce0d615098ee6036163f4dde220d543372aa859c7de41826",
-  "selected_centroids_sha256": "87b4e4edb76d4608f64524c780ca2bd48896bb9b8c532aed512059663935a072",
+  "selected_centroids_sha256": "a6803ca87c8020b254089b96517a4a78d7177121d28c450b4cb31a9c07965733",
   "real_pruning_enabled": false
 }
