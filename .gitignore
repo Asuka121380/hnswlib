@@ -14,3 +14,5 @@ var/
 build-local/
 build-pipeline/
 results/
+HNSW_BASELINE_TRACE_IMPLEMENTATION_PLAN.md
+WEIRDO_ENVIRONMENT.md
