@@ -245,6 +245,32 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         return cur_element_count;
     }
 
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+    V0Layer0GraphView getV0Layer0GraphView() const {
+        return V0Layer0GraphView(
+            data_level0_memory_,
+            cur_element_count.load(),
+            size_data_per_element_,
+            offsetData_,
+            data_size_,
+            label_offset_,
+            maxM0_);
+    }
+
+    template<typename Callback>
+    void forEachV0Layer0Edge(Callback callback) const {
+        getV0Layer0GraphView().forEachEdge(callback);
+    }
+
+    std::array<uint8_t, 32> getV0Layer0AdjacencyFingerprint() const {
+        return getV0Layer0GraphView().adjacencyFingerprint();
+    }
+
+    std::string getV0Layer0AdjacencyFingerprintHex() const {
+        return getV0Layer0GraphView().adjacencyFingerprintHex();
+    }
+#endif
+
     size_t getDeletedCount() {
         return num_deleted_;
     }

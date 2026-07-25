@@ -1,5 +1,7 @@
 #pragma once
 
+#include "edge_quant_v0_graph_access.h"
+
 namespace hnswlib {
 
 // Stage 1 feature-isolation scaffold. Query-time V0 state is introduced in
