@@ -16,10 +16,18 @@ endif()
 
 option(HNSWLIB_ENABLE_EDGE_QUANT_V0 "Enable V0 conservative edge-quantised pruning support." OFF)
 option(HNSWLIB_ENABLE_V0_SHADOW_VALIDATION "Enable exact shadow validation for V0 pruning decisions." OFF)
+option(HNSWLIB_BUILD_FAISS_PQ_TOOLS "Build Faiss-based offline V0 PQ tools." OFF)
+set(FAISS_INCLUDE_DIR "" CACHE PATH "Faiss source/install root containing faiss/impl/ProductQuantizer.h")
+set(FAISS_LIBRARY "" CACHE FILEPATH "Path to the Faiss CPU shared/static library")
 
 if(HNSWLIB_ENABLE_V0_SHADOW_VALIDATION AND NOT HNSWLIB_ENABLE_EDGE_QUANT_V0)
     message(FATAL_ERROR
         "HNSWLIB_ENABLE_V0_SHADOW_VALIDATION requires HNSWLIB_ENABLE_EDGE_QUANT_V0=ON")
+endif()
+
+if(HNSWLIB_BUILD_FAISS_PQ_TOOLS AND NOT HNSWLIB_ENABLE_EDGE_QUANT_V0)
+    message(FATAL_ERROR
+        "HNSWLIB_BUILD_FAISS_PQ_TOOLS requires HNSWLIB_ENABLE_EDGE_QUANT_V0=ON")
 endif()
 
 if(HNSWLIB_ENABLE_EDGE_QUANT_V0)
@@ -144,6 +152,9 @@ if(HNSWLIB_EXAMPLES)
       add_executable(v0_edge_sampler examples/cpp/v0_edge_sampler.cpp)
       target_link_libraries(v0_edge_sampler hnswlib)
 
+      add_executable(v0_sidecar_inspector examples/cpp/v0_sidecar_inspector.cpp)
+      target_link_libraries(v0_sidecar_inspector hnswlib)
+
       add_executable(v0_feature_isolation_test tests/cpp/v0_feature_isolation_test.cpp)
       target_link_libraries(v0_feature_isolation_test hnswlib)
       add_test(NAME v0_feature_isolation_test COMMAND v0_feature_isolation_test)
@@ -168,6 +179,57 @@ if(HNSWLIB_EXAMPLES)
       target_link_libraries(v0_edge_sampler_test hnswlib)
       add_test(NAME v0_edge_sampler_test COMMAND v0_edge_sampler_test)
 
+      add_executable(v0_codebook_reader_test tests/cpp/v0_codebook_reader_test.cpp)
+      target_link_libraries(v0_codebook_reader_test hnswlib)
+      add_test(NAME v0_codebook_reader_test COMMAND v0_codebook_reader_test)
+
+      add_executable(v0_all_edge_encoder_test tests/cpp/v0_all_edge_encoder_test.cpp)
+      target_link_libraries(v0_all_edge_encoder_test hnswlib)
+      add_test(NAME v0_all_edge_encoder_test COMMAND v0_all_edge_encoder_test)
+
+      if(HNSWLIB_BUILD_FAISS_PQ_TOOLS)
+        find_package(faiss CONFIG QUIET)
+        if(TARGET faiss)
+          set(HNSWLIB_V0_FAISS_TARGET faiss)
+        elseif(TARGET faiss::faiss)
+          set(HNSWLIB_V0_FAISS_TARGET faiss::faiss)
+        elseif(FAISS_INCLUDE_DIR AND FAISS_LIBRARY)
+          if(NOT EXISTS "${FAISS_INCLUDE_DIR}/faiss/impl/ProductQuantizer.h")
+            message(FATAL_ERROR
+              "FAISS_INCLUDE_DIR does not contain faiss/impl/ProductQuantizer.h")
+          endif()
+          if(NOT EXISTS "${FAISS_LIBRARY}")
+            message(FATAL_ERROR "FAISS_LIBRARY does not exist")
+          endif()
+          add_library(hnswlib_v0_faiss UNKNOWN IMPORTED)
+          set_target_properties(
+            hnswlib_v0_faiss
+            PROPERTIES
+              IMPORTED_LOCATION "${FAISS_LIBRARY}"
+              INTERFACE_INCLUDE_DIRECTORIES "${FAISS_INCLUDE_DIR}"
+          )
+          set(HNSWLIB_V0_FAISS_TARGET hnswlib_v0_faiss)
+        else()
+          message(FATAL_ERROR
+            "Faiss C++ development files not found. Provide a Faiss CMake package or set FAISS_INCLUDE_DIR and FAISS_LIBRARY.")
+        endif()
+
+        add_executable(
+          v0_faiss_edge_encoder
+          examples/cpp/v0_faiss_edge_encoder.cpp
+        )
+        set_target_properties(
+          v0_faiss_edge_encoder
+          PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED YES
+        )
+        target_link_libraries(
+          v0_faiss_edge_encoder
+          PRIVATE hnswlib ${HNSWLIB_V0_FAISS_TARGET}
+        )
+      endif()
+
       find_package(PythonInterp 3 QUIET)
       if(PYTHONINTERP_FOUND)
         add_test(
@@ -177,6 +239,15 @@ if(HNSWLIB_EXAMPLES)
         )
         set_tests_properties(
           v0_pq_local_test
+          PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        )
+        add_test(
+          NAME v0_sidecar_validator_test
+          COMMAND ${PYTHON_EXECUTABLE}
+                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/python/v0_sidecar_validator_test.py
+        )
+        set_tests_properties(
+          v0_sidecar_validator_test
           PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         )
       endif()

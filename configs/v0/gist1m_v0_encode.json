@@ -1,0 +1,19 @@
+{
+  "dataset": "gist1m",
+  "dimension": 960,
+  "M_pq": 32,
+  "nbits": 8,
+  "code_bytes_per_directed_edge": 32,
+  "query_lut_bytes_float32": 32768,
+  "block_size": 4096,
+  "traversal_order": "source_id_then_layer0_slot",
+  "zero_length_policy": "exact_only_zero_filled_record",
+  "direction_error_rounding": "float64_nextafter_positive_infinity",
+  "anchor_projection": "source_dot_decoded_direction_float64_accumulation",
+  "numeric_padding": 0.0,
+  "faiss_version": "1.14.3",
+  "faiss_source_commit": "0ca9df4792b173d573044ee14ca0704780176e82",
+  "selected_codebook_sha256": "6b79abd305a82c61ce0d615098ee6036163f4dde220d543372aa859c7de41826",
+  "selected_centroids_sha256": "87b4e4edb76d4608f64524c780ca2bd48896bb9b8c532aed512059663935a072",
+  "real_pruning_enabled": false
+}
