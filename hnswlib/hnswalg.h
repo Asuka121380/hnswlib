@@ -13,6 +13,12 @@
 #include "baseline_trace.h"
 #include <chrono>
 #endif
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+#include "edge_quant_v0.h"
+#include "edge_quant_v0_io.h"
+#include "edge_quant_v0_metadata.h"
+#include "edge_quant_v0_metrics.h"
+#endif
 
 namespace hnswlib {
 typedef unsigned int tableint;
@@ -327,7 +333,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
 
     // bare_bone_search means there is no check for deletions and stop condition is ignored in return of extra performance
-    template <bool bare_bone_search = true, bool collect_metrics = false>
+    template <
+        bool bare_bone_search = true,
+        bool collect_metrics = false,
+        bool use_edge_quant_v0 = false>
     std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
     searchBaseLayerST(
         tableint ep_id,
@@ -426,6 +435,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
                 if (!(visited_array[candidate_id] == visited_array_tag)) {
                     visited_array[candidate_id] = visited_array_tag;
+
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+                    if (use_edge_quant_v0) {
+                        // Stage 1 intentionally falls through to the original
+                        // exact-distance path. Later stages insert the V0 gate
+                        // here without duplicating the HNSW update logic.
+                    }
+#endif
 
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
                     BaselineDcoRecord trace_record;
@@ -1384,6 +1401,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     }
 
 
+    template <bool use_edge_quant_v0 = false>
     std::priority_queue<std::pair<dist_t, labeltype >>
     searchKnnInternal(
         const void *query_data,
@@ -1458,18 +1476,18 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         bool bare_bone_search = !num_deleted_ && !isIdAllowed;
         if (bare_bone_search) {
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
-            top_candidates = searchBaseLayerST<true>(
+            top_candidates = searchBaseLayerST<true, false, use_edge_quant_v0>(
                     currObj, query_data, std::max(ef_, k), isIdAllowed, nullptr, trace);
 #else
-            top_candidates = searchBaseLayerST<true>(
+            top_candidates = searchBaseLayerST<true, false, use_edge_quant_v0>(
                     currObj, query_data, std::max(ef_, k), isIdAllowed);
 #endif
         } else {
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
-            top_candidates = searchBaseLayerST<false>(
+            top_candidates = searchBaseLayerST<false, false, use_edge_quant_v0>(
                     currObj, query_data, std::max(ef_, k), isIdAllowed, nullptr, trace);
 #else
-            top_candidates = searchBaseLayerST<false>(
+            top_candidates = searchBaseLayerST<false, false, use_edge_quant_v0>(
                     currObj, query_data, std::max(ef_, k), isIdAllowed);
 #endif
         }
@@ -1494,7 +1512,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
     std::priority_queue<std::pair<dist_t, labeltype >>
     searchKnn(const void *query_data, size_t k, BaseFilterFunctor* isIdAllowed = nullptr) const {
-        return searchKnnInternal(
+        return searchKnnInternal<false>(
             query_data,
             k,
             isIdAllowed
@@ -1516,11 +1534,32 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         trace.beginQuery();
         const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
         std::priority_queue<std::pair<dist_t, labeltype >> result =
-            searchKnnInternal(query_data, k, isIdAllowed, &trace);
+            searchKnnInternal<false>(query_data, k, isIdAllowed, &trace);
         const std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
         trace.summary.trace_query_latency_ns = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
         return result;
+    }
+#endif
+
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+    std::priority_queue<std::pair<dist_t, labeltype >>
+    searchKnnV0(
+        const void *query_data,
+        size_t k,
+        V0QueryMetrics* metrics = nullptr,
+        BaseFilterFunctor* isIdAllowed = nullptr) const {
+        if (metrics != nullptr) {
+            metrics->reset();
+        }
+        return searchKnnInternal<true>(
+            query_data,
+            k,
+            isIdAllowed
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+            , nullptr
+#endif
+        );
     }
 #endif
 

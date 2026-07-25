@@ -14,6 +14,22 @@ if(HNSWLIB_ENABLE_BASELINE_TRACE)
     target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_BASELINE_TRACE=1)
 endif()
 
+option(HNSWLIB_ENABLE_EDGE_QUANT_V0 "Enable V0 conservative edge-quantised pruning support." OFF)
+option(HNSWLIB_ENABLE_V0_SHADOW_VALIDATION "Enable exact shadow validation for V0 pruning decisions." OFF)
+
+if(HNSWLIB_ENABLE_V0_SHADOW_VALIDATION AND NOT HNSWLIB_ENABLE_EDGE_QUANT_V0)
+    message(FATAL_ERROR
+        "HNSWLIB_ENABLE_V0_SHADOW_VALIDATION requires HNSWLIB_ENABLE_EDGE_QUANT_V0=ON")
+endif()
+
+if(HNSWLIB_ENABLE_EDGE_QUANT_V0)
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_EDGE_QUANT_V0=1)
+endif()
+
+if(HNSWLIB_ENABLE_V0_SHADOW_VALIDATION)
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_V0_SHADOW_VALIDATION=1)
+endif()
+
 target_include_directories(hnswlib INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
@@ -122,5 +138,11 @@ if(HNSWLIB_EXAMPLES)
       add_executable(baseline_trace_test tests/cpp/baseline_trace_test.cpp)
       target_link_libraries(baseline_trace_test hnswlib)
       add_test(NAME baseline_trace_test COMMAND baseline_trace_test)
+    endif()
+
+    if(HNSWLIB_ENABLE_EDGE_QUANT_V0)
+      add_executable(v0_feature_isolation_test tests/cpp/v0_feature_isolation_test.cpp)
+      target_link_libraries(v0_feature_isolation_test hnswlib)
+      add_test(NAME v0_feature_isolation_test COMMAND v0_feature_isolation_test)
     endif()
 endif()
