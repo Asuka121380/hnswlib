@@ -1,0 +1,16 @@
+{
+  "dataset": "sift1m",
+  "dimension": 128,
+  "M_pq_candidates": [8, 16, 32],
+  "nbits": 8,
+  "training_seed": 17,
+  "split_seed": 29,
+  "validation_fraction": 0.1,
+  "iterations": 25,
+  "nredo": 1,
+  "min_points_per_centroid": 39,
+  "max_points_per_centroid": 256,
+  "threads": 8,
+  "faiss_backend": "cpu",
+  "quantized_object": "layer0_directed_unit_edge_direction"
+}

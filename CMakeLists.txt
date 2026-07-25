@@ -167,5 +167,18 @@ if(HNSWLIB_EXAMPLES)
       add_executable(v0_edge_sampler_test tests/cpp/v0_edge_sampler_test.cpp)
       target_link_libraries(v0_edge_sampler_test hnswlib)
       add_test(NAME v0_edge_sampler_test COMMAND v0_edge_sampler_test)
+
+      find_package(PythonInterp 3 QUIET)
+      if(PYTHONINTERP_FOUND)
+        add_test(
+          NAME v0_pq_local_test
+          COMMAND ${PYTHON_EXECUTABLE}
+                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/python/v0_pq_local_test.py
+        )
+        set_tests_properties(
+          v0_pq_local_test
+          PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        )
+      endif()
     endif()
 endif()
