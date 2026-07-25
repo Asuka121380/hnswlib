@@ -148,5 +148,17 @@ if(HNSWLIB_EXAMPLES)
       add_executable(v0_graph_access_test tests/cpp/v0_graph_access_test.cpp)
       target_link_libraries(v0_graph_access_test hnswlib)
       add_test(NAME v0_graph_access_test COMMAND v0_graph_access_test)
+
+      add_executable(v0_metadata_layout_test tests/cpp/v0_metadata_layout_test.cpp)
+      target_link_libraries(v0_metadata_layout_test hnswlib)
+      add_test(NAME v0_metadata_layout_test COMMAND v0_metadata_layout_test)
+
+      add_executable(v0_sidecar_roundtrip_test tests/cpp/v0_sidecar_roundtrip_test.cpp)
+      target_link_libraries(v0_sidecar_roundtrip_test hnswlib)
+      add_test(NAME v0_sidecar_roundtrip_test COMMAND v0_sidecar_roundtrip_test)
+
+      add_executable(v0_sidecar_mismatch_test tests/cpp/v0_sidecar_mismatch_test.cpp)
+      target_link_libraries(v0_sidecar_mismatch_test hnswlib)
+      add_test(NAME v0_sidecar_mismatch_test COMMAND v0_sidecar_mismatch_test)
     endif()
 endif()
