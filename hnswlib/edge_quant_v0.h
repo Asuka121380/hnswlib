@@ -1,6 +1,7 @@
 #pragma once
 
 #include "edge_quant_v0_graph_access.h"
+#include "edge_quant_v0_sampler.h"
 
 namespace hnswlib {
 
