@@ -18,6 +18,7 @@
 #include "edge_quant_v0_io.h"
 #include "edge_quant_v0_metadata.h"
 #include "edge_quant_v0_metrics.h"
+#include "edge_quant_v0_query_metadata.h"
 #endif
 
 namespace hnswlib {
@@ -79,6 +80,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
     std::mutex deleted_elements_lock;  // lock for deleted_elements
     std::unordered_set<tableint> deleted_elements;  // contains internal ids of deleted elements
+
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+    std::shared_ptr<const EdgeQuantV0Metadata> edge_quant_v0_metadata_;
+    std::atomic<bool> edge_quant_v0_metadata_stale_{false};
+#endif
 
 
     HierarchicalNSW(SpaceInterface<dist_t> *s) {
@@ -159,6 +165,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     }
 
     void clear() {
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+        clearEdgeQuantV0Metadata();
+#endif
         free(data_level0_memory_);
         data_level0_memory_ = nullptr;
         for (tableint i = 0; i < cur_element_count; i++) {
@@ -268,6 +277,122 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
     std::string getV0Layer0AdjacencyFingerprintHex() const {
         return getV0Layer0GraphView().adjacencyFingerprintHex();
+    }
+
+    V0Sha256Digest getV0SerializedIndexFingerprint() const {
+        EdgeQuantV0Sha256 sha;
+        sha.update(&offsetLevel0_, sizeof(offsetLevel0_));
+        sha.update(&max_elements_, sizeof(max_elements_));
+        sha.update(&cur_element_count, sizeof(cur_element_count));
+        sha.update(
+            &size_data_per_element_, sizeof(size_data_per_element_));
+        sha.update(&label_offset_, sizeof(label_offset_));
+        sha.update(&offsetData_, sizeof(offsetData_));
+        sha.update(&maxlevel_, sizeof(maxlevel_));
+        sha.update(&enterpoint_node_, sizeof(enterpoint_node_));
+        sha.update(&maxM_, sizeof(maxM_));
+        sha.update(&maxM0_, sizeof(maxM0_));
+        sha.update(&M_, sizeof(M_));
+        sha.update(&mult_, sizeof(mult_));
+        sha.update(&ef_construction_, sizeof(ef_construction_));
+
+        const size_t node_count = cur_element_count.load();
+        const size_t level0_bytes =
+            node_count * size_data_per_element_;
+        if (level0_bytes != 0U) {
+            sha.update(data_level0_memory_, level0_bytes);
+        }
+        for (size_t node = 0U; node < node_count; ++node) {
+            const unsigned int link_list_size =
+                element_levels_[node] > 0 ?
+                    static_cast<unsigned int>(
+                        size_links_per_element_ *
+                        static_cast<size_t>(element_levels_[node])) :
+                    0U;
+            sha.update(&link_list_size, sizeof(link_list_size));
+            if (link_list_size != 0U) {
+                sha.update(linkLists_[node], link_list_size);
+            }
+        }
+        return sha.final();
+    }
+
+    std::string getV0SerializedIndexFingerprintHex() const {
+        return edgeQuantV0Sha256Hex(
+            getV0SerializedIndexFingerprint());
+    }
+
+    void loadEdgeQuantV0Metadata(
+        const std::string& sidecar_path) {
+        if (data_size_ == 0U ||
+            data_size_ % sizeof(float) != 0U) {
+            throw std::runtime_error(
+                "V0 query metadata requires float32 index vectors");
+        }
+        const size_t dimension_size =
+            data_size_ / sizeof(float);
+        if (dimension_size >
+            static_cast<size_t>(
+                std::numeric_limits<uint32_t>::max())) {
+            throw std::runtime_error(
+                "V0 query metadata dimension exceeds uint32");
+        }
+        const std::shared_ptr<const EdgeQuantV0Metadata> loaded =
+            hnswlib::loadEdgeQuantV0Metadata(
+                sidecar_path,
+                getV0Layer0GraphView(),
+                static_cast<uint32_t>(dimension_size),
+                getV0SerializedIndexFingerprint());
+        edge_quant_v0_metadata_ = loaded;
+        edge_quant_v0_metadata_stale_.store(
+            false, std::memory_order_release);
+    }
+
+    void clearEdgeQuantV0Metadata() {
+        edge_quant_v0_metadata_.reset();
+        edge_quant_v0_metadata_stale_.store(
+            false, std::memory_order_release);
+    }
+
+    bool hasEdgeQuantV0Metadata() const {
+        return static_cast<bool>(edge_quant_v0_metadata_);
+    }
+
+    bool isEdgeQuantV0MetadataStale() const {
+        return hasEdgeQuantV0Metadata() &&
+            edge_quant_v0_metadata_stale_.load(
+                std::memory_order_acquire);
+    }
+
+    const EdgeQuantV0Metadata& getEdgeQuantV0Metadata() const {
+        requireUsableEdgeQuantV0Metadata();
+        return *edge_quant_v0_metadata_;
+    }
+
+    V0EdgeRecordView getEdgeQuantV0Record(
+        tableint source_id,
+        size_t layer0_slot) const {
+        return getEdgeQuantV0Metadata().edgeRecord(
+            source_id, layer0_slot);
+    }
+
+    void markEdgeQuantV0MetadataStale() {
+        if (edge_quant_v0_metadata_) {
+            edge_quant_v0_metadata_stale_.store(
+                true, std::memory_order_release);
+        }
+    }
+
+    void requireUsableEdgeQuantV0Metadata() const {
+        if (!edge_quant_v0_metadata_) {
+            throw std::runtime_error(
+                "V0 query metadata is not loaded");
+        }
+        if (edge_quant_v0_metadata_stale_.load(
+                std::memory_order_acquire)) {
+            throw std::runtime_error(
+                "V0 query metadata is stale");
+        }
     }
 #endif
 
@@ -1153,6 +1278,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
 
     void updatePoint(const void *dataPoint, tableint internalId, float updateNeighborProbability) {
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+        markEdgeQuantV0MetadataStale();
+#endif
         // update the feature vector associated with existing point with new vector
         memcpy(getDataByInternalId(internalId), dataPoint, data_size_);
 
@@ -1338,6 +1466,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 throw std::runtime_error("The number of elements exceeds the specified limit");
             }
 
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+            markEdgeQuantV0MetadataStale();
+#endif
             cur_c = cur_element_count;
             cur_element_count++;
             label_lookup_[label] = cur_c;
@@ -1578,6 +1709,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         if (metrics != nullptr) {
             metrics->reset();
         }
+        requireUsableEdgeQuantV0Metadata();
         return searchKnnInternal<true>(
             query_data,
             k,

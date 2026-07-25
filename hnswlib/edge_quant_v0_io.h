@@ -770,6 +770,11 @@ class V0OwnedSidecar {
               bytes_.empty() ? NULL : bytes_.data(),
               bytes_.size())) {}
 
+    V0OwnedSidecar(V0OwnedSidecar&&) = default;
+    V0OwnedSidecar& operator=(V0OwnedSidecar&&) = default;
+    V0OwnedSidecar(const V0OwnedSidecar&) = delete;
+    V0OwnedSidecar& operator=(const V0OwnedSidecar&) = delete;
+
     V0SidecarView view() const {
         return V0SidecarView(bytes_.data(), bytes_.size(), header_);
     }

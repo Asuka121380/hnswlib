@@ -178,10 +178,9 @@ struct V0IndexCompatibility {
     }
 };
 
-// Kept as the query-facing metadata root introduced by the isolation
-// scaffold. A later milestone will add ownership/lifecycle state.
-struct EdgeQuantV0Metadata {
-    V0SidecarHeader header;
-};
+// Defined in edge_quant_v0_query_metadata.h. Keeping the declaration here
+// lets schema-only users avoid pulling query ownership and graph access into
+// offline tools.
+class EdgeQuantV0Metadata;
 
 }  // namespace hnswlib

@@ -7,17 +7,6 @@
 
 #include "hnswlib/hnswlib.h"
 
-template<typename Queue>
-bool sameQueue(Queue left, Queue right) {
-    if (left.size() != right.size()) return false;
-    while (!left.empty()) {
-        if (left.top() != right.top()) return false;
-        left.pop();
-        right.pop();
-    }
-    return true;
-}
-
 bool metricsAreZero(const hnswlib::V0QueryMetrics& metrics) {
     return metrics.bound_evaluated == 0 &&
         metrics.bound_pruned == 0 &&
@@ -26,6 +15,16 @@ bool metricsAreZero(const hnswlib::V0QueryMetrics& metrics) {
         metrics.exact_distance_saved == 0 &&
         metrics.lower_bound_violation == 0 &&
         metrics.false_prune == 0;
+}
+
+template<typename Callable>
+bool throwsException(Callable callable) {
+    try {
+        callable();
+    } catch (const std::exception&) {
+        return true;
+    }
+    return false;
 }
 
 class EvenLabelFilter : public hnswlib::BaseFilterFunctor {
@@ -56,33 +55,41 @@ int main() {
     index.setEf(50);
     EvenLabelFilter even_label_filter;
 
-    for (size_t q = 0; q < 16; ++q) {
-        const float* query = base.data() + q * dimension;
-        const std::priority_queue<std::pair<float, hnswlib::labeltype> > baseline =
-            index.searchKnn(query, k);
-
-        hnswlib::V0QueryMetrics metrics;
-        metrics.bound_evaluated = 1;
-        const std::priority_queue<std::pair<float, hnswlib::labeltype> > v0 =
-            index.searchKnnV0(query, k, &metrics);
-
-        if (!sameQueue(baseline, v0)) {
-            throw std::runtime_error("V0 isolation scaffold changed search results");
-        }
-        if (!metricsAreZero(metrics)) {
-            throw std::runtime_error("V0 isolation scaffold produced non-zero metrics");
-        }
-
-        const std::priority_queue<std::pair<float, hnswlib::labeltype> > filtered_baseline =
+    const float* query = base.data();
+    const std::priority_queue<std::pair<float, hnswlib::labeltype> > baseline =
+        index.searchKnn(query, k);
+    const std::priority_queue<std::pair<float, hnswlib::labeltype> >
+        filtered_baseline =
             index.searchKnn(query, k, &even_label_filter);
-        const std::priority_queue<std::pair<float, hnswlib::labeltype> > filtered_v0 =
-            index.searchKnnV0(query, k, &metrics, &even_label_filter);
-        if (!sameQueue(filtered_baseline, filtered_v0)) {
-            throw std::runtime_error("Filtered V0 isolation scaffold changed search results");
-        }
-        if (!metricsAreZero(metrics)) {
-            throw std::runtime_error("Filtered V0 isolation scaffold produced non-zero metrics");
-        }
+    if (baseline.empty() || filtered_baseline.empty()) {
+        throw std::runtime_error("Baseline search unexpectedly returned no results");
+    }
+
+    hnswlib::V0QueryMetrics metrics;
+    metrics.bound_evaluated = 1;
+    if (!throwsException([&index, query, k, &metrics]() {
+            (void)index.searchKnnV0(query, k, &metrics);
+        })) {
+        throw std::runtime_error(
+            "V0 search accepted missing query metadata");
+    }
+    if (!metricsAreZero(metrics)) {
+        throw std::runtime_error(
+            "Rejected V0 search did not reset query metrics");
+    }
+
+    metrics.bound_evaluated = 1;
+    if (!throwsException(
+            [&index, query, k, &metrics, &even_label_filter]() {
+                (void)index.searchKnnV0(
+                    query, k, &metrics, &even_label_filter);
+            })) {
+        throw std::runtime_error(
+            "Filtered V0 search accepted missing query metadata");
+    }
+    if (!metricsAreZero(metrics)) {
+        throw std::runtime_error(
+            "Rejected filtered V0 search did not reset query metrics");
     }
 
     std::cout << "v0_feature_isolation_test_ok" << std::endl;
