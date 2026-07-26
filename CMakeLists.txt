@@ -173,6 +173,10 @@ if(HNSWLIB_EXAMPLES)
       add_executable(v0_sidecar_inspector examples/cpp/v0_sidecar_inspector.cpp)
       target_link_libraries(v0_sidecar_inspector hnswlib)
 
+      add_executable(v0_search_runner examples/cpp/v0_search_runner.cpp)
+      target_link_libraries(v0_search_runner hnswlib)
+      add_test(NAME v0_search_runner_cli_test COMMAND v0_search_runner --help)
+
       add_executable(v0_feature_isolation_test tests/cpp/v0_feature_isolation_test.cpp)
       target_link_libraries(v0_feature_isolation_test hnswlib)
       add_test(NAME v0_feature_isolation_test COMMAND v0_feature_isolation_test)
