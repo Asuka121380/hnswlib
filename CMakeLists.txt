@@ -209,6 +209,14 @@ if(HNSWLIB_EXAMPLES)
       target_link_libraries(v0_query_metadata_test hnswlib)
       add_test(NAME v0_query_metadata_test COMMAND v0_query_metadata_test)
 
+      add_executable(v0_query_lut_test tests/cpp/v0_query_lut_test.cpp)
+      target_link_libraries(v0_query_lut_test hnswlib)
+      add_test(NAME v0_query_lut_test COMMAND v0_query_lut_test)
+
+      add_executable(v0_bound_evaluator_test tests/cpp/v0_bound_evaluator_test.cpp)
+      target_link_libraries(v0_bound_evaluator_test hnswlib)
+      add_test(NAME v0_bound_evaluator_test COMMAND v0_bound_evaluator_test)
+
       if(HNSWLIB_BUILD_FAISS_PQ_TOOLS)
         find_package(faiss CONFIG QUIET)
         if(TARGET faiss)
