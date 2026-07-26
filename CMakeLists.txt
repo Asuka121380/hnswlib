@@ -217,6 +217,12 @@ if(HNSWLIB_EXAMPLES)
       target_link_libraries(v0_bound_evaluator_test hnswlib)
       add_test(NAME v0_bound_evaluator_test COMMAND v0_bound_evaluator_test)
 
+      if(HNSWLIB_ENABLE_V0_SHADOW_VALIDATION)
+        add_executable(v0_shadow_validation_test tests/cpp/v0_shadow_validation_test.cpp)
+        target_link_libraries(v0_shadow_validation_test hnswlib)
+        add_test(NAME v0_shadow_validation_test COMMAND v0_shadow_validation_test)
+      endif()
+
       if(HNSWLIB_BUILD_FAISS_PQ_TOOLS)
         find_package(faiss CONFIG QUIET)
         if(TARGET faiss)

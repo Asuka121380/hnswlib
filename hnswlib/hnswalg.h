@@ -498,7 +498,22 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
         , BaselineTraceCollector* trace = nullptr
 #endif
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+        , const EdgeQuantV0QueryContext* v0_query = nullptr
+        , V0QueryMetrics* v0_metrics = nullptr
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+        , V0ShadowValidationCollector* v0_shadow = nullptr
+        , uint64_t v0_query_id = 0U
+#endif
+#endif
         ) const {
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+        if (use_edge_quant_v0 &&
+            (v0_query == nullptr || v0_metrics == nullptr)) {
+            throw std::invalid_argument(
+                "V0 search requires query context and metrics");
+        }
+#endif
         VisitedList *vl = visited_list_pool_->getFreeVisitedList();
         vl_type *visited_array = vl->mass;
         vl_type visited_array_tag = vl->curV;
@@ -588,10 +603,39 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     visited_array[candidate_id] = visited_array_tag;
 
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+                    V0BoundResult v0_bound;
+                    bool v0_bound_attempted = false;
+                    bool v0_would_prune = false;
                     if (use_edge_quant_v0) {
-                        // Stage 1 intentionally falls through to the original
-                        // exact-distance path. Later stages insert the V0 gate
-                        // here without duplicating the HNSW update logic.
+                        // Until the exact result heap is full, lowerBound is
+                        // not a rejection threshold. Milestone 9 records an
+                        // exact fallback and preserves the original path.
+                        if (top_candidates.size() < ef) {
+                            ++v0_metrics->exact_fallback;
+                        } else {
+                            v0_bound_attempted = true;
+                            v0_bound = v0_query->evaluate(
+                                getEdgeQuantV0Record(
+                                    current_node_id, j - 1U),
+                                static_cast<double>(candidate_dist));
+                            if (v0_bound.valid()) {
+                                ++v0_metrics->bound_evaluated;
+                                v0_would_prune =
+                                    v0_bound.provesFartherThan(
+                                        static_cast<double>(lowerBound));
+                                if (v0_would_prune) {
+                                    ++v0_metrics->bound_pruned;
+                                }
+                            } else if (
+                                v0_bound.status ==
+                                    V0BoundStatus::ExactOnly ||
+                                v0_bound.status ==
+                                    V0BoundStatus::ZeroLength) {
+                                ++v0_metrics->exact_only_fallback;
+                            } else {
+                                ++v0_metrics->exact_fallback;
+                            }
+                        }
                     }
 #endif
 
@@ -626,6 +670,57 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     if (trace != nullptr) trace_record.dist_qd = static_cast<double>(dist);
 #else
                     dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);
+#endif
+
+#if defined(HNSWLIB_ENABLE_EDGE_QUANT_V0) && \
+    defined(HNSWLIB_ENABLE_V0_SHADOW_VALIDATION)
+                    if (use_edge_quant_v0 && v0_bound_attempted) {
+                        const double exact_squared_distance =
+                            static_cast<double>(dist);
+                        const bool lower_bound_violation =
+                            v0_bound.valid() &&
+                            v0_bound.lower_bound >
+                                exact_squared_distance;
+                        const bool false_prune =
+                            v0_would_prune &&
+                            exact_squared_distance <=
+                                static_cast<double>(lowerBound);
+                        if (lower_bound_violation) {
+                            ++v0_metrics->lower_bound_violation;
+                        }
+                        if (false_prune) {
+                            ++v0_metrics->false_prune;
+                        }
+                        if (v0_shadow != nullptr) {
+                            V0ShadowRecord record;
+                            record.query_id = v0_query_id;
+                            record.current_node_id =
+                                static_cast<uint64_t>(current_node_id);
+                            record.candidate_id =
+                                static_cast<uint64_t>(candidate_id);
+                            record.bound_status =
+                                static_cast<uint8_t>(v0_bound.status);
+                            record.current_squared_distance =
+                                static_cast<double>(candidate_dist);
+                            record.threshold =
+                                static_cast<double>(lowerBound);
+                            record.approximate_squared_distance =
+                                v0_bound.approximate_squared_distance;
+                            record.error_radius =
+                                v0_bound.error_radius;
+                            record.lower_bound =
+                                v0_bound.lower_bound;
+                            record.shadow_exact_squared_distance =
+                                exact_squared_distance;
+                            record.would_prune = v0_would_prune;
+                            record.lower_bound_valid =
+                                v0_bound.valid();
+                            record.lower_bound_violation =
+                                lower_bound_violation;
+                            record.false_prune = false_prune;
+                            v0_shadow->append(record);
+                        }
+                    }
 #endif
 
                     bool flag_consider_candidate;
@@ -1567,6 +1662,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
         , BaselineTraceCollector* trace
 #endif
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+        , const EdgeQuantV0QueryContext* v0_query = nullptr
+        , V0QueryMetrics* v0_metrics = nullptr
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+        , V0ShadowValidationCollector* v0_shadow = nullptr
+        , uint64_t v0_query_id = 0U
+#endif
+#endif
         ) const {
         std::priority_queue<std::pair<dist_t, labeltype >> result;
         if (cur_element_count == 0) {
@@ -1634,18 +1737,46 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         if (bare_bone_search) {
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
             top_candidates = searchBaseLayerST<true, false, use_edge_quant_v0>(
-                    currObj, query_data, std::max(ef_, k), isIdAllowed, nullptr, trace);
+                    currObj, query_data, std::max(ef_, k), isIdAllowed, nullptr, trace
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+                    , v0_query, v0_metrics
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+                    , v0_shadow, v0_query_id
+#endif
+#endif
+                    );
 #else
             top_candidates = searchBaseLayerST<true, false, use_edge_quant_v0>(
-                    currObj, query_data, std::max(ef_, k), isIdAllowed);
+                    currObj, query_data, std::max(ef_, k), isIdAllowed
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+                    , nullptr, v0_query, v0_metrics
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+                    , v0_shadow, v0_query_id
+#endif
+#endif
+                    );
 #endif
         } else {
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
             top_candidates = searchBaseLayerST<false, false, use_edge_quant_v0>(
-                    currObj, query_data, std::max(ef_, k), isIdAllowed, nullptr, trace);
+                    currObj, query_data, std::max(ef_, k), isIdAllowed, nullptr, trace
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+                    , v0_query, v0_metrics
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+                    , v0_shadow, v0_query_id
+#endif
+#endif
+                    );
 #else
             top_candidates = searchBaseLayerST<false, false, use_edge_quant_v0>(
-                    currObj, query_data, std::max(ef_, k), isIdAllowed);
+                    currObj, query_data, std::max(ef_, k), isIdAllowed
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+                    , nullptr, v0_query, v0_metrics
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+                    , v0_shadow, v0_query_id
+#endif
+#endif
+                    );
 #endif
         }
 
@@ -1705,17 +1836,34 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         const void *query_data,
         size_t k,
         V0QueryMetrics* metrics = nullptr,
-        BaseFilterFunctor* isIdAllowed = nullptr) const {
-        if (metrics != nullptr) {
-            metrics->reset();
-        }
+        BaseFilterFunctor* isIdAllowed = nullptr
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+        , V0ShadowValidationCollector* shadow = nullptr
+        , uint64_t query_id = 0U
+#endif
+        ) const {
+        V0QueryMetrics local_metrics;
+        V0QueryMetrics* active_metrics =
+            metrics != nullptr ? metrics : &local_metrics;
+        active_metrics->reset();
         requireUsableEdgeQuantV0Metadata();
+        const EdgeQuantV0QueryContext query_context(
+            static_cast<const float*>(query_data),
+            getEdgeQuantV0Metadata().view());
         return searchKnnInternal<true>(
             query_data,
             k,
             isIdAllowed
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
             , nullptr
+#endif
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+            , &query_context
+            , active_metrics
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+            , shadow
+            , query_id
+#endif
 #endif
         );
     }

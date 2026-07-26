@@ -37,6 +37,17 @@ bool metricsAreZero(const hnswlib::V0QueryMetrics& metrics) {
         metrics.false_prune == 0U;
 }
 
+bool metricsAreShadowOnlySafe(
+    const hnswlib::V0QueryMetrics& metrics) {
+    return metrics.bound_evaluated == 0U &&
+        metrics.bound_pruned == 0U &&
+        metrics.exact_fallback +
+            metrics.exact_only_fallback > 0U &&
+        metrics.exact_distance_saved == 0U &&
+        metrics.lower_bound_violation == 0U &&
+        metrics.false_prune == 0U;
+}
+
 class EvenLabelFilter : public hnswlib::BaseFilterFunctor {
  public:
     bool operator()(hnswlib::labeltype id) {
@@ -90,7 +101,8 @@ void writeMatchingSidecar(
             writer.writeEdgeRecord(
                 code,
                 2U,
-                0U,
+                static_cast<uint8_t>(
+                    hnswlib::V0_EDGE_EXACT_ONLY),
                 1.0 + static_cast<double>(edge_index),
                 0.01 * static_cast<double>(edge_index % 7U),
                 -0.5 * static_cast<double>(edge_index),
@@ -205,8 +217,8 @@ void testQueryMetadataLifecycle() {
             sameQueue(baseline, v0),
             "loaded V0 exact search changed baseline results");
         v0_test::require(
-            metricsAreZero(metrics),
-            "Milestone 6 V0 search produced pruning metrics");
+            metricsAreShadowOnlySafe(metrics),
+            "Milestone 9 V0 search produced unsafe metrics");
 
         const std::priority_queue<
             std::pair<float, hnswlib::labeltype> > filtered_baseline =
@@ -219,8 +231,8 @@ void testQueryMetadataLifecycle() {
             sameQueue(filtered_baseline, filtered_v0),
             "loaded filtered V0 search changed baseline results");
         v0_test::require(
-            metricsAreZero(metrics),
-            "filtered Milestone 6 search produced pruning metrics");
+            metricsAreShadowOnlySafe(metrics),
+            "filtered Milestone 9 search produced unsafe metrics");
     }
 
     const float updated[8] = {

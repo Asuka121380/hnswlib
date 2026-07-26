@@ -41,6 +41,41 @@ inline double multiplyDown(double left, double right) {
     return nextDown(left * right);
 }
 
+// hnswlib's operational squared-L2 distance is accumulated in float32.
+// A mathematical lower bound must therefore also cover the possibility that
+// the operational result rounded below the real squared distance. The
+// standard gamma_n model is applied with a deliberately conservative
+// operation budget for both the current and target distance computations.
+inline double floatSquaredL2PaddingUpper(
+    double observed_current_squared_distance,
+    double edge_length,
+    uint32_t dimension) {
+    const double operation_count =
+        8.0 * static_cast<double>(dimension) + 64.0;
+    const double scaled_epsilon =
+        operation_count *
+        static_cast<double>(
+            std::numeric_limits<float>::epsilon());
+    if (!std::isfinite(scaled_epsilon) ||
+        scaled_epsilon >= 1.0) {
+        throw std::runtime_error(
+            "V0 float32 L2 rounding model is invalid");
+    }
+    const double gamma =
+        nextUp(scaled_epsilon / (1.0 - scaled_epsilon));
+    const double current_upper =
+        nextUp(
+            observed_current_squared_distance /
+            (1.0 - gamma));
+    const double target_norm_upper =
+        addUp(
+            nextUp(std::sqrt(current_upper)),
+            nextUp(edge_length));
+    const double target_squared_upper =
+        multiplyUp(target_norm_upper, target_norm_upper);
+    return multiplyUp(gamma, target_squared_upper);
+}
+
 inline float castFloatUp(double value) {
     if (!std::isfinite(value)) {
         throw std::runtime_error(
@@ -380,6 +415,16 @@ class EdgeQuantV0QueryContext {
             edge_quant_v0_query_detail::addUp(
                 error_radius_upper,
                 stored_padding);
+        const double operational_l2_padding =
+            edge_quant_v0_query_detail::
+                floatSquaredL2PaddingUpper(
+                    exact_current_squared_distance,
+                    length,
+                    lut_.dimension());
+        error_radius_upper =
+            edge_quant_v0_query_detail::addUp(
+                error_radius_upper,
+                operational_l2_padding);
         const double lower_bound =
             edge_quant_v0_query_detail::addDown(
                 approximate_lower,

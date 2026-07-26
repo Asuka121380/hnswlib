@@ -11,8 +11,7 @@ var/
 .vs/
 **.DS_Store
 *.pyc
-build-local/
-build-pipeline/
+build-*/
 results/
 HNSW_BASELINE_TRACE_IMPLEMENTATION_PLAN.md
 WEIRDO_ENVIRONMENT.md
