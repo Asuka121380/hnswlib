@@ -501,6 +501,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
         , const EdgeQuantV0QueryContext* v0_query = nullptr
         , V0QueryMetrics* v0_metrics = nullptr
+        , bool v0_enable_real_pruning = false
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
         , V0ShadowValidationCollector* v0_shadow = nullptr
         , uint64_t v0_query_id = 0U
@@ -636,6 +637,17 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                                 ++v0_metrics->exact_fallback;
                             }
                         }
+                    }
+#endif
+
+#if defined(HNSWLIB_ENABLE_EDGE_QUANT_V0) && \
+    defined(HNSWLIB_ENABLE_V0_REAL_PRUNING)
+                    if (use_edge_quant_v0 &&
+                        v0_enable_real_pruning &&
+                        v0_bound_attempted &&
+                        v0_would_prune) {
+                        ++v0_metrics->exact_distance_saved;
+                        continue;
                     }
 #endif
 
@@ -1665,6 +1677,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
         , const EdgeQuantV0QueryContext* v0_query = nullptr
         , V0QueryMetrics* v0_metrics = nullptr
+        , bool v0_enable_real_pruning = false
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
         , V0ShadowValidationCollector* v0_shadow = nullptr
         , uint64_t v0_query_id = 0U
@@ -1739,7 +1752,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             top_candidates = searchBaseLayerST<true, false, use_edge_quant_v0>(
                     currObj, query_data, std::max(ef_, k), isIdAllowed, nullptr, trace
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
-                    , v0_query, v0_metrics
+                    , v0_query, v0_metrics, v0_enable_real_pruning
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
 #endif
@@ -1749,7 +1762,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             top_candidates = searchBaseLayerST<true, false, use_edge_quant_v0>(
                     currObj, query_data, std::max(ef_, k), isIdAllowed
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
-                    , nullptr, v0_query, v0_metrics
+                    , nullptr, v0_query, v0_metrics, v0_enable_real_pruning
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
 #endif
@@ -1761,7 +1774,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             top_candidates = searchBaseLayerST<false, false, use_edge_quant_v0>(
                     currObj, query_data, std::max(ef_, k), isIdAllowed, nullptr, trace
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
-                    , v0_query, v0_metrics
+                    , v0_query, v0_metrics, v0_enable_real_pruning
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
 #endif
@@ -1771,7 +1784,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             top_candidates = searchBaseLayerST<false, false, use_edge_quant_v0>(
                     currObj, query_data, std::max(ef_, k), isIdAllowed
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
-                    , nullptr, v0_query, v0_metrics
+                    , nullptr, v0_query, v0_metrics, v0_enable_real_pruning
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
 #endif
@@ -1860,6 +1873,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
             , &query_context
             , active_metrics
+            , false
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
             , shadow
             , query_id
@@ -1867,6 +1881,41 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
         );
     }
+
+#ifdef HNSWLIB_ENABLE_V0_REAL_PRUNING
+    std::priority_queue<std::pair<dist_t, labeltype >>
+    searchKnnV0Pruned(
+        const void *query_data,
+        size_t k,
+        V0QueryMetrics* metrics = nullptr,
+        BaseFilterFunctor* isIdAllowed = nullptr) const {
+        V0QueryMetrics local_metrics;
+        V0QueryMetrics* active_metrics =
+            metrics != nullptr ? metrics : &local_metrics;
+        active_metrics->reset();
+        requireUsableEdgeQuantV0Metadata();
+        const EdgeQuantV0QueryContext query_context(
+            static_cast<const float*>(query_data),
+            getEdgeQuantV0Metadata().view());
+        return searchKnnInternal<true>(
+            query_data,
+            k,
+            isIdAllowed
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+            , nullptr
+#endif
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+            , &query_context
+            , active_metrics
+            , true
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+            , nullptr
+            , 0U
+#endif
+#endif
+        );
+    }
+#endif
 #endif
 
 

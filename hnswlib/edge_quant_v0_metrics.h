@@ -5,8 +5,9 @@
 namespace hnswlib {
 
 struct V0QueryMetrics {
-    // In shadow-only mode bound_pruned counts decisions that would prune.
-    // exact_distance_saved remains zero until real pruning is enabled.
+    // In observe-only searches, bound_pruned counts decisions that would
+    // prune. In a real-pruning search it counts decisions actually taken,
+    // and therefore equals exact_distance_saved.
     uint64_t bound_evaluated = 0;
     uint64_t bound_pruned = 0;
     uint64_t exact_fallback = 0;

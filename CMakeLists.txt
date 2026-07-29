@@ -16,6 +16,7 @@ endif()
 
 option(HNSWLIB_ENABLE_EDGE_QUANT_V0 "Enable V0 conservative edge-quantised pruning support." OFF)
 option(HNSWLIB_ENABLE_V0_SHADOW_VALIDATION "Enable exact shadow validation for V0 pruning decisions." OFF)
+option(HNSWLIB_ENABLE_V0_REAL_PRUNING "Enable opt-in V0 pruning that skips proven-far exact distances." OFF)
 option(HNSWLIB_BUILD_FAISS_PQ_TOOLS "Build Faiss-based offline V0 PQ tools." OFF)
 set(FAISS_INCLUDE_DIR "" CACHE PATH "Faiss source/install root containing faiss/impl/ProductQuantizer.h")
 set(FAISS_LIBRARY "" CACHE FILEPATH "Path to the Faiss CPU shared/static library")
@@ -23,6 +24,11 @@ set(FAISS_LIBRARY "" CACHE FILEPATH "Path to the Faiss CPU shared/static library
 if(HNSWLIB_ENABLE_V0_SHADOW_VALIDATION AND NOT HNSWLIB_ENABLE_EDGE_QUANT_V0)
     message(FATAL_ERROR
         "HNSWLIB_ENABLE_V0_SHADOW_VALIDATION requires HNSWLIB_ENABLE_EDGE_QUANT_V0=ON")
+endif()
+
+if(HNSWLIB_ENABLE_V0_REAL_PRUNING AND NOT HNSWLIB_ENABLE_EDGE_QUANT_V0)
+    message(FATAL_ERROR
+        "HNSWLIB_ENABLE_V0_REAL_PRUNING requires HNSWLIB_ENABLE_EDGE_QUANT_V0=ON")
 endif()
 
 if(HNSWLIB_BUILD_FAISS_PQ_TOOLS AND NOT HNSWLIB_ENABLE_EDGE_QUANT_V0)
@@ -48,6 +54,10 @@ endif()
 
 if(HNSWLIB_ENABLE_V0_SHADOW_VALIDATION)
     target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_V0_SHADOW_VALIDATION=1)
+endif()
+
+if(HNSWLIB_ENABLE_V0_REAL_PRUNING)
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_V0_REAL_PRUNING=1)
 endif()
 
 target_include_directories(hnswlib INTERFACE
@@ -225,6 +235,12 @@ if(HNSWLIB_EXAMPLES)
         add_executable(v0_shadow_validation_test tests/cpp/v0_shadow_validation_test.cpp)
         target_link_libraries(v0_shadow_validation_test hnswlib)
         add_test(NAME v0_shadow_validation_test COMMAND v0_shadow_validation_test)
+      endif()
+
+      if(HNSWLIB_ENABLE_V0_REAL_PRUNING)
+        add_executable(v0_real_pruning_test tests/cpp/v0_real_pruning_test.cpp)
+        target_link_libraries(v0_real_pruning_test hnswlib)
+        add_test(NAME v0_real_pruning_test COMMAND v0_real_pruning_test)
       endif()
 
       if(HNSWLIB_BUILD_FAISS_PQ_TOOLS)

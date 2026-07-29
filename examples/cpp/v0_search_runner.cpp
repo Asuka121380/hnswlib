@@ -212,7 +212,7 @@ void printUsage(std::ostream& out) {
         << "  --index-path <hnsw-index>\n"
         << "  --sidecar-path <v0meta>\n"
         << "  --output-dir <directory>\n"
-        << "  --mode <correctness|shadow>\n"
+        << "  --mode <correctness|shadow|prune>\n"
         << "  [--run-id <text>]\n"
         << "  [--query-start <non-negative-integer>]\n"
         << "  [--query-count <non-negative-integer; 0 means remaining>]\n"
@@ -272,13 +272,22 @@ Options parseOptions(int argc, char** argv) {
             "--dataset-config, --index-path, --sidecar-path, "
             "--output-dir, and --mode are required");
     }
-    if (options.mode != "correctness" && options.mode != "shadow") {
-        throw std::runtime_error("--mode must be correctness or shadow");
+    if (options.mode != "correctness" &&
+        options.mode != "shadow" &&
+        options.mode != "prune") {
+        throw std::runtime_error(
+            "--mode must be correctness, shadow, or prune");
     }
 #ifndef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
     if (options.mode == "shadow") {
         throw std::runtime_error(
             "shadow mode requires HNSWLIB_ENABLE_V0_SHADOW_VALIDATION=ON");
+    }
+#endif
+#ifndef HNSWLIB_ENABLE_V0_REAL_PRUNING
+    if (options.mode == "prune") {
+        throw std::runtime_error(
+            "prune mode requires HNSWLIB_ENABLE_V0_REAL_PRUNING=ON");
     }
 #endif
     if (options.k == 0 || options.ef_search == 0 ||
@@ -629,9 +638,13 @@ void writeMetadata(
         << "\",\n"
         << "  \"sidecar_bytes\": " << fileSize(options.sidecar_path)
         << ",\n"
-        << "  \"real_pruning_enabled\": false,\n"
+        << "  \"real_pruning_enabled\": "
+        << (options.mode == "prune" ? "true" : "false")
+        << ",\n"
         << "  \"bound_pruned_semantics\": "
-        << "\"would_prune_shadow_only\",\n"
+        << (options.mode == "prune" ?
+                "\"actual_prune\",\n" :
+                "\"would_prune_observe_only\",\n")
         << "  \"shadow_sample_modulus\": "
         << options.shadow_sample_modulus << ",\n"
         << "  \"shadow_sample_remainder\": "
@@ -643,9 +656,14 @@ void writeMetadata(
         << "  \"working_tree_dirty\": \""
         << jsonEscape(options.working_tree_dirty) << "\",\n"
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
-        << "  \"shadow_validation_compiled\": true\n"
+        << "  \"shadow_validation_compiled\": true,\n"
 #else
-        << "  \"shadow_validation_compiled\": false\n"
+        << "  \"shadow_validation_compiled\": false,\n"
+#endif
+#ifdef HNSWLIB_ENABLE_V0_REAL_PRUNING
+        << "  \"real_pruning_compiled\": true\n"
+#else
+        << "  \"real_pruning_compiled\": false\n"
 #endif
         << "}\n";
 }
@@ -657,7 +675,11 @@ bool writeSummary(
         totals.mismatch_queries == 0 &&
         totals.lower_bound_violation == 0 &&
         totals.false_prune == 0 &&
-        totals.exact_distance_saved == 0 &&
+        (options.mode == "prune" ||
+            totals.exact_distance_saved == 0) &&
+        (options.mode != "prune" ||
+            totals.bound_pruned ==
+                totals.exact_distance_saved) &&
         (options.mode != "shadow" || totals.bound_evaluated > 0);
     const double divisor =
         totals.query_count == 0 ?
@@ -794,9 +816,19 @@ void run(const Options& options) {
         hnswlib::V0QueryMetrics metrics;
         const std::chrono::steady_clock::time_point v0_start =
             std::chrono::steady_clock::now();
-        const std::priority_queue<
-            std::pair<float, hnswlib::labeltype> > v0 =
-            index.searchKnnV0(
+        std::priority_queue<
+            std::pair<float, hnswlib::labeltype> > v0;
+#ifdef HNSWLIB_ENABLE_V0_REAL_PRUNING
+        if (options.mode == "prune") {
+            v0 = index.searchKnnV0Pruned(
+                query,
+                options.k,
+                &metrics,
+                nullptr);
+        } else
+#endif
+        {
+            v0 = index.searchKnnV0(
                 query,
                 options.k,
                 &metrics,
@@ -806,6 +838,7 @@ void run(const Options& options) {
                 , query_id
 #endif
             );
+        }
         const std::chrono::steady_clock::time_point v0_end =
             std::chrono::steady_clock::now();
 
@@ -884,7 +917,11 @@ void run(const Options& options) {
         << " mode=" << options.mode
         << " queries=" << totals.query_count
         << " bound_evaluated=" << totals.bound_evaluated
-        << " would_prune=" << totals.bound_pruned
+        << (options.mode == "prune" ?
+                " pruned=" : " would_prune=")
+        << totals.bound_pruned
+        << " exact_distance_saved="
+        << totals.exact_distance_saved
         << " lower_bound_violation="
         << totals.lower_bound_violation
         << " false_prune=" << totals.false_prune
