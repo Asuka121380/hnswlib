@@ -183,8 +183,16 @@ def main() -> int:
             failures.append(f"summary.{key}={summary.get(key)} (expected 0)")
     if int(summary.get("bound_evaluated", 0)) <= 0:
         failures.append("bound_evaluated must be positive")
-    if int(summary.get("shadow_records_seen", -1)) != int(summary.get("bound_evaluated", -2)):
-        failures.append("shadow_records_seen != bound_evaluated")
+    attempted_bounds = (
+        int(summary.get("bound_evaluated", 0))
+        + int(summary.get("exact_fallback", 0))
+        + int(summary.get("exact_only_fallback", 0))
+    )
+    if int(summary.get("shadow_records_seen", -1)) != attempted_bounds:
+        failures.append(
+            "shadow_records_seen != bound_evaluated + exact_fallback + "
+            "exact_only_fallback"
+        )
     if len(query) != int(summary.get("query_count", -1)):
         failures.append("query_metrics row count != summary.query_count")
     if "results_equal" in query and not as_bool(query["results_equal"]).all():
@@ -389,6 +397,7 @@ def main() -> int:
         "sampled_rows": sampled_rows,
         "analysis_valid_rows": valid_rows,
         "sampling_modulus": modulus,
+        "attempted_bounds_accounted": attempted_bounds,
         "summary": summary,
         "metadata": metadata,
         "coverage": coverage,

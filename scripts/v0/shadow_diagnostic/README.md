@@ -44,3 +44,12 @@ Paths can be overridden with `REPO_ROOT`, `BUILD_ROOT`, `RUN_ROOT`,
 
 The job refuses to overwrite a completed stage. The expected final results are
 under `$HOME/IndividualProject/results/v0_shadow_diagnostic/gist1m/20260803-minimal`.
+
+Record accounting follows the implementation semantics:
+
+```text
+shadow_records_seen = bound_evaluated + exact_fallback + exact_only_fallback
+```
+
+`bound_evaluated` counts valid lower bounds, while the collector also records
+attempted bounds that fall back to an exact distance.
