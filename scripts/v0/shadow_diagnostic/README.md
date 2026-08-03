@@ -48,8 +48,13 @@ under `$HOME/IndividualProject/results/v0_shadow_diagnostic/gist1m/20260803-mini
 Record accounting follows the implementation semantics:
 
 ```text
-shadow_records_seen = bound_evaluated + exact_fallback + exact_only_fallback
+bound_evaluated + exact_only_fallback
+  <= shadow_records_seen
+  <= bound_evaluated + exact_only_fallback + exact_fallback
 ```
 
 `bound_evaluated` counts valid lower bounds, while the collector also records
-attempted bounds that fall back to an exact distance.
+attempted bounds that fall back to an exact distance. `exact_fallback` also
+includes searches performed before the result heap has formed a valid rejection
+threshold; no bound is attempted in those cases. Therefore an exact equality is
+not recoverable from summary counters without adding another runtime metric.
