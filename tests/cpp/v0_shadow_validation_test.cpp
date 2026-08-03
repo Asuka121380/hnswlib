@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -183,6 +184,8 @@ void testShadowSearchPreservesBaseline() {
     index.setEf(6U);
     uint64_t total_bound_evaluated = 0U;
     uint64_t total_would_prune = 0U;
+    uint64_t total_raw_prunable = 0U;
+    uint64_t total_oracle_prunable = 0U;
     uint64_t total_fallback = 0U;
     RecordingShadowCollector collector;
     for (size_t query_id = 0U;
@@ -249,6 +252,8 @@ void testShadowSearchPreservesBaseline() {
             "shadow validation found a false prune");
         total_bound_evaluated += metrics.bound_evaluated;
         total_would_prune += metrics.bound_pruned;
+        total_raw_prunable += metrics.raw_prunable;
+        total_oracle_prunable += metrics.oracle_prunable;
         total_fallback +=
             metrics.exact_fallback +
             metrics.exact_only_fallback;
@@ -269,6 +274,8 @@ void testShadowSearchPreservesBaseline() {
         "shadow record count does not match attempted valid bounds");
 
     bool observed_would_prune = false;
+    uint64_t recorded_raw_prunable = 0U;
+    uint64_t recorded_oracle_prunable = 0U;
     for (size_t i = 0U; i < collector.records.size(); ++i) {
         const hnswlib::V0ShadowRecord& record =
             collector.records[i];
@@ -278,6 +285,51 @@ void testShadowSearchPreservesBaseline() {
         v0_test::require(
             record.query_id < node_count,
             "shadow record did not preserve its query id");
+        v0_test::require(
+            record.graph_layer == 0U,
+            "V0 shadow record has an unexpected graph layer");
+        v0_test::require(
+            std::isfinite(record.edge_length) &&
+                record.edge_length > 0.0 &&
+                std::isfinite(record.direction_error) &&
+                record.direction_error >= 0.0,
+            "shadow record contains invalid edge metadata");
+        v0_test::require(
+            record.anchor_projection_lower <=
+                record.anchor_projection,
+            "anchor projection was not rounded downward");
+        v0_test::require(
+            record.length_squared_lower <=
+                record.edge_length * record.edge_length,
+            "edge-length square was not rounded downward");
+        const long double component_sum =
+            static_cast<long double>(record.direction_error_radius) +
+            static_cast<long double>(record.stored_numeric_padding) +
+            static_cast<long double>(record.operational_l2_padding);
+        const long double closure =
+            static_cast<long double>(record.error_radius) -
+            component_sum;
+        const long double closure_tolerance =
+            1.0e-15L *
+            (1.0L + std::fabs(
+                static_cast<long double>(record.error_radius)));
+        v0_test::require(
+            closure >= -closure_tolerance,
+            "radius components exceed the total radius");
+        v0_test::require(
+            std::fabs(
+                closure - static_cast<long double>(
+                    record.rounding_closure_padding)) <=
+                closure_tolerance,
+            "rounding closure padding does not close the radius");
+        const double expected_lower =
+            hnswlib::edge_quant_v0_query_detail::addDown(
+                record.approximate_squared_distance,
+                -record.error_radius);
+        v0_test::require(
+            record.lower_bound ==
+                (expected_lower > 0.0 ? expected_lower : 0.0),
+            "shadow record cannot reproduce the current lower bound");
         v0_test::require(
             !record.lower_bound_violation &&
                 record.lower_bound <=
@@ -293,10 +345,27 @@ void testShadowSearchPreservesBaseline() {
                     record.threshold,
                 "would-prune shadow record is unsafe");
         }
+        if (record.approximate_squared_distance >
+            record.threshold) {
+            ++recorded_raw_prunable;
+        }
+        if (record.oracle_would_prune) {
+            ++recorded_oracle_prunable;
+            v0_test::require(
+                record.shadow_exact_squared_distance >
+                    record.threshold,
+                "oracle-would-prune record does not exceed threshold");
+        }
     }
     v0_test::require(
         observed_would_prune,
         "collector did not retain a would-prune record");
+    v0_test::require(
+        total_raw_prunable == recorded_raw_prunable,
+        "raw-prunable full counter does not match shadow records");
+    v0_test::require(
+        total_oracle_prunable == recorded_oracle_prunable,
+        "oracle-prunable full counter does not match shadow records");
 }
 
 }  // namespace

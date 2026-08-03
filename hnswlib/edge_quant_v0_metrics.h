@@ -10,6 +10,8 @@ struct V0QueryMetrics {
     // and therefore equals exact_distance_saved.
     uint64_t bound_evaluated = 0;
     uint64_t bound_pruned = 0;
+    uint64_t raw_prunable = 0;
+    uint64_t oracle_prunable = 0;
     uint64_t exact_fallback = 0;
     uint64_t exact_only_fallback = 0;
     uint64_t exact_distance_saved = 0;
@@ -22,18 +24,36 @@ struct V0QueryMetrics {
 };
 
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+static const uint32_t V0_SHADOW_SCHEMA_VERSION = 2U;
+
 struct V0ShadowRecord {
     uint64_t query_id = 0;
     uint64_t current_node_id = 0;
     uint64_t candidate_id = 0;
+    uint32_t graph_layer = 0;
     uint8_t bound_status = 0;
     double current_squared_distance = 0.0;
     double threshold = 0.0;
+    double edge_length = 0.0;
+    double direction_error = 0.0;
+    double anchor_projection = 0.0;
+    double anchor_projection_lower = 0.0;
+    double query_direction_inner_product_upper = 0.0;
+    double residual_direction_inner_product_upper = 0.0;
+    double length_squared_lower = 0.0;
+    double cross_term_upper = 0.0;
+    double base_plus_length_lower = 0.0;
     double approximate_squared_distance = 0.0;
+    double current_distance_root_upper = 0.0;
+    double direction_error_radius = 0.0;
+    double stored_numeric_padding = 0.0;
+    double operational_l2_padding = 0.0;
+    double rounding_closure_padding = 0.0;
     double error_radius = 0.0;
     double lower_bound = 0.0;
     double shadow_exact_squared_distance = 0.0;
     bool would_prune = false;
+    bool oracle_would_prune = false;
     bool lower_bound_valid = false;
     bool lower_bound_violation = false;
     bool false_prune = false;

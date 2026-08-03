@@ -66,6 +66,8 @@ struct Totals {
     uint64_t v0_latency_ns = 0;
     uint64_t bound_evaluated = 0;
     uint64_t bound_pruned = 0;
+    uint64_t raw_prunable = 0;
+    uint64_t oracle_prunable = 0;
     uint64_t exact_fallback = 0;
     uint64_t exact_only_fallback = 0;
     uint64_t exact_distance_saved = 0;
@@ -107,6 +109,27 @@ std::string jsonEscape(const std::string& value) {
         }
     }
     return out.str();
+}
+
+std::string csvEscape(const std::string& value) {
+    bool needs_quotes = false;
+    for (size_t i = 0; i < value.size(); ++i) {
+        if (value[i] == ',' || value[i] == '"' ||
+            value[i] == '\n' || value[i] == '\r') {
+            needs_quotes = true;
+            break;
+        }
+    }
+    if (!needs_quotes) return value;
+    std::string escaped;
+    escaped.reserve(value.size() + 2U);
+    escaped.push_back('"');
+    for (size_t i = 0; i < value.size(); ++i) {
+        if (value[i] == '"') escaped.push_back('"');
+        escaped.push_back(value[i]);
+    }
+    escaped.push_back('"');
+    return escaped;
 }
 
 std::string readText(const std::string& path) {
@@ -511,10 +534,14 @@ class CsvShadowCollector :
  public:
     CsvShadowCollector(
         const std::string& path,
+        const std::string& run_id,
+        size_t ef_search,
         size_t modulus,
         size_t remainder,
         Totals* totals)
         : output_(path.c_str()),
+          run_id_(run_id),
+          ef_search_(ef_search),
           modulus_(modulus),
           remainder_(remainder),
           totals_(totals) {
@@ -523,11 +550,24 @@ class CsvShadowCollector :
                 "Cannot create shadow_records.csv");
         }
         output_
-            << "query_id,current_node_id,candidate_id,bound_status,"
-            << "current_squared_distance,threshold,"
-            << "approximate_squared_distance,error_radius,lower_bound,"
-            << "shadow_exact_squared_distance,would_prune,"
-            << "lower_bound_valid,lower_bound_violation,false_prune\n";
+            << "schema_version,run_id,query_id,current_node_id,"
+            << "candidate_id,graph_layer,bound_status,ef_search,"
+            << "current_squared_distance,threshold,edge_length,"
+            << "direction_error,anchor_projection,"
+            << "anchor_projection_lower,"
+            << "query_direction_inner_product_upper,"
+            << "residual_direction_inner_product_upper,"
+            << "length_squared_lower,cross_term_upper,"
+            << "base_plus_length_lower,approximate_squared_distance,"
+            << "current_distance_root_upper,direction_error_radius,"
+            << "stored_numeric_padding,operational_l2_padding,"
+            << "rounding_closure_padding,error_radius,lower_bound,"
+            << "current_lb,shadow_exact_squared_distance,would_prune,"
+            << "current_would_prune,oracle_would_prune,"
+            << "lower_bound_valid,lower_bound_violation,false_prune,"
+            << "cap_lb,cap_would_prune,blockwise_lb,"
+            << "blockwise_would_prune,repr_lb_star,"
+            << "repr_lb_star_would_prune\n";
     }
 
     void append(const hnswlib::V0ShadowRecord& record) {
@@ -543,21 +583,43 @@ class CsvShadowCollector :
             return;
         }
         output_
+            << hnswlib::V0_SHADOW_SCHEMA_VERSION << ','
+            << csvEscape(run_id_) << ','
             << record.query_id << ','
             << record.current_node_id << ','
             << record.candidate_id << ','
+            << record.graph_layer << ','
             << static_cast<unsigned int>(record.bound_status) << ','
+            << ef_search_ << ','
             << std::setprecision(17)
             << record.current_squared_distance << ','
             << record.threshold << ','
+            << record.edge_length << ','
+            << record.direction_error << ','
+            << record.anchor_projection << ','
+            << record.anchor_projection_lower << ','
+            << record.query_direction_inner_product_upper << ','
+            << record.residual_direction_inner_product_upper << ','
+            << record.length_squared_lower << ','
+            << record.cross_term_upper << ','
+            << record.base_plus_length_lower << ','
             << record.approximate_squared_distance << ','
+            << record.current_distance_root_upper << ','
+            << record.direction_error_radius << ','
+            << record.stored_numeric_padding << ','
+            << record.operational_l2_padding << ','
+            << record.rounding_closure_padding << ','
             << record.error_radius << ','
+            << record.lower_bound << ','
             << record.lower_bound << ','
             << record.shadow_exact_squared_distance << ','
             << (record.would_prune ? 1 : 0) << ','
+            << (record.would_prune ? 1 : 0) << ','
+            << (record.oracle_would_prune ? 1 : 0) << ','
             << (record.lower_bound_valid ? 1 : 0) << ','
             << (record.lower_bound_violation ? 1 : 0) << ','
-            << (record.false_prune ? 1 : 0) << '\n';
+            << (record.false_prune ? 1 : 0)
+            << ",,,,,," << '\n';
         if (!output_) {
             throw std::runtime_error(
                 "Cannot write shadow_records.csv");
@@ -575,6 +637,8 @@ class CsvShadowCollector :
 
  private:
     std::ofstream output_;
+    std::string run_id_;
+    size_t ef_search_;
     size_t modulus_;
     size_t remainder_;
     Totals* totals_;
@@ -586,6 +650,8 @@ void addMetrics(
     const hnswlib::V0QueryMetrics& metrics) {
     totals.bound_evaluated += metrics.bound_evaluated;
     totals.bound_pruned += metrics.bound_pruned;
+    totals.raw_prunable += metrics.raw_prunable;
+    totals.oracle_prunable += metrics.oracle_prunable;
     totals.exact_fallback += metrics.exact_fallback;
     totals.exact_only_fallback += metrics.exact_only_fallback;
     totals.exact_distance_saved += metrics.exact_distance_saved;
@@ -606,7 +672,10 @@ void writeMetadata(
     out
         << "{\n"
         << "  \"format\": \"hnswlib_v0_search_run\",\n"
-        << "  \"format_version\": 1,\n"
+        << "  \"format_version\": 2,\n"
+        << "  \"shadow_schema_version\": 2,\n"
+        << "  \"enabled_methods\": [\"current\"],\n"
+        << "  \"validation_tolerance\": 0.0,\n"
         << "  \"dataset\": \"" << jsonEscape(dataset.dataset) << "\",\n"
         << "  \"mode\": \"" << jsonEscape(options.mode) << "\",\n"
         << "  \"run_id\": \"" << jsonEscape(options.run_id) << "\",\n"
@@ -675,6 +744,8 @@ bool writeSummary(
         totals.mismatch_queries == 0 &&
         totals.lower_bound_violation == 0 &&
         totals.false_prune == 0 &&
+        totals.raw_prunable <= totals.bound_evaluated &&
+        totals.oracle_prunable <= totals.bound_evaluated &&
         (options.mode == "prune" ||
             totals.exact_distance_saved == 0) &&
         (options.mode != "prune" ||
@@ -690,7 +761,8 @@ bool writeSummary(
     out
         << "{\n"
         << "  \"format\": \"hnswlib_v0_search_summary\",\n"
-        << "  \"format_version\": 1,\n"
+        << "  \"format_version\": 2,\n"
+        << "  \"shadow_schema_version\": 2,\n"
         << "  \"status\": \"" << (valid ? "valid" : "invalid") << "\",\n"
         << "  \"query_count\": " << totals.query_count << ",\n"
         << "  \"mismatch_queries\": " << totals.mismatch_queries << ",\n"
@@ -704,6 +776,8 @@ bool writeSummary(
         << "  \"v0_latency_ns\": " << totals.v0_latency_ns << ",\n"
         << "  \"bound_evaluated\": " << totals.bound_evaluated << ",\n"
         << "  \"bound_pruned\": " << totals.bound_pruned << ",\n"
+        << "  \"raw_prunable\": " << totals.raw_prunable << ",\n"
+        << "  \"oracle_prunable\": " << totals.oracle_prunable << ",\n"
         << "  \"exact_fallback\": " << totals.exact_fallback << ",\n"
         << "  \"exact_only_fallback\": "
         << totals.exact_only_fallback << ",\n"
@@ -784,7 +858,8 @@ void run(const Options& options) {
     query_out
         << "query_id,baseline_recall_at_k,v0_recall_at_k,"
         << "results_equal,baseline_latency_ns,v0_latency_ns,"
-        << "bound_evaluated,bound_pruned,exact_fallback,"
+        << "bound_evaluated,bound_pruned,raw_prunable,"
+        << "oracle_prunable,exact_fallback,"
         << "exact_only_fallback,exact_distance_saved,"
         << "lower_bound_violation,false_prune\n";
 
@@ -793,6 +868,8 @@ void run(const Options& options) {
     if (options.mode == "shadow") {
         shadow_collector.reset(new CsvShadowCollector(
             options.output_dir + "/shadow_records.csv",
+            options.run_id,
+            options.ef_search,
             options.shadow_sample_modulus,
             options.shadow_sample_remainder,
             &totals));
@@ -873,6 +950,8 @@ void run(const Options& options) {
             << v0_ns << ','
             << metrics.bound_evaluated << ','
             << metrics.bound_pruned << ','
+            << metrics.raw_prunable << ','
+            << metrics.oracle_prunable << ','
             << metrics.exact_fallback << ','
             << metrics.exact_only_fallback << ','
             << metrics.exact_distance_saved << ','

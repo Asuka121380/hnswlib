@@ -282,17 +282,41 @@ enum class V0BoundStatus : uint8_t {
 
 struct V0BoundResult {
     V0BoundStatus status;
+    double edge_length;
+    double direction_error;
+    double anchor_projection;
+    double anchor_projection_lower;
     double query_direction_inner_product_upper;
     double residual_direction_inner_product_upper;
+    double length_squared_lower;
+    double cross_term_upper;
+    double base_plus_length_lower;
     double approximate_squared_distance;
+    double current_distance_root_upper;
+    double direction_error_radius;
+    double stored_numeric_padding;
+    double operational_l2_padding;
+    double rounding_closure_padding;
     double error_radius;
     double lower_bound;
 
     V0BoundResult()
         : status(V0BoundStatus::InvalidEdgeMetadata),
+          edge_length(0.0),
+          direction_error(0.0),
+          anchor_projection(0.0),
+          anchor_projection_lower(0.0),
           query_direction_inner_product_upper(0.0),
           residual_direction_inner_product_upper(0.0),
+          length_squared_lower(0.0),
+          cross_term_upper(0.0),
+          base_plus_length_lower(0.0),
           approximate_squared_distance(0.0),
+          current_distance_root_upper(0.0),
+          direction_error_radius(0.0),
+          stored_numeric_padding(0.0),
+          operational_l2_padding(0.0),
+          rounding_closure_padding(0.0),
           error_radius(0.0),
           lower_bound(0.0) {}
 
@@ -367,6 +391,10 @@ class EdgeQuantV0QueryContext {
             result.status = V0BoundStatus::InvalidEdgeMetadata;
             return result;
         }
+        result.edge_length = length;
+        result.direction_error = direction_error;
+        result.anchor_projection = anchor;
+        result.stored_numeric_padding = stored_padding;
 
         try {
             result.query_direction_inner_product_upper =
@@ -378,6 +406,7 @@ class EdgeQuantV0QueryContext {
 
         const double anchor_lower =
             edge_quant_v0_query_detail::nextDown(anchor);
+        result.anchor_projection_lower = anchor_lower;
         result.residual_direction_inner_product_upper =
             edge_quant_v0_query_detail::addUp(
                 result.query_direction_inner_product_upper,
@@ -386,15 +415,18 @@ class EdgeQuantV0QueryContext {
         const double length_squared_lower =
             edge_quant_v0_query_detail::multiplyDown(
                 length, length);
+        result.length_squared_lower = length_squared_lower;
         const double twice_length = 2.0 * length;
         const double cross_term_upper =
             edge_quant_v0_query_detail::multiplyUp(
                 twice_length,
                 result.residual_direction_inner_product_upper);
+        result.cross_term_upper = cross_term_upper;
         const double base_plus_length_lower =
             edge_quant_v0_query_detail::addDown(
                 exact_current_squared_distance,
                 length_squared_lower);
+        result.base_plus_length_lower = base_plus_length_lower;
         const double approximate_lower =
             edge_quant_v0_query_detail::addDown(
                 base_plus_length_lower,
@@ -403,17 +435,21 @@ class EdgeQuantV0QueryContext {
         const double current_distance_root_upper =
             edge_quant_v0_query_detail::nextUp(
                 std::sqrt(exact_current_squared_distance));
-        double error_radius_upper =
+        result.current_distance_root_upper =
+            current_distance_root_upper;
+        double direction_error_radius_upper =
             edge_quant_v0_query_detail::multiplyUp(
                 twice_length,
                 current_distance_root_upper);
-        error_radius_upper =
+        direction_error_radius_upper =
             edge_quant_v0_query_detail::multiplyUp(
-                error_radius_upper,
+                direction_error_radius_upper,
                 direction_error);
-        error_radius_upper =
+        result.direction_error_radius =
+            direction_error_radius_upper;
+        double error_radius_upper =
             edge_quant_v0_query_detail::addUp(
-                error_radius_upper,
+                direction_error_radius_upper,
                 stored_padding);
         const double operational_l2_padding =
             edge_quant_v0_query_detail::
@@ -421,10 +457,21 @@ class EdgeQuantV0QueryContext {
                     exact_current_squared_distance,
                     length,
                     lut_.dimension());
+        result.operational_l2_padding =
+            operational_l2_padding;
         error_radius_upper =
             edge_quant_v0_query_detail::addUp(
                 error_radius_upper,
                 operational_l2_padding);
+        const long double component_sum =
+            static_cast<long double>(direction_error_radius_upper) +
+            static_cast<long double>(stored_padding) +
+            static_cast<long double>(operational_l2_padding);
+        const long double closure =
+            static_cast<long double>(error_radius_upper) -
+            component_sum;
+        result.rounding_closure_padding =
+            closure > 0.0L ? static_cast<double>(closure) : 0.0;
         const double lower_bound =
             edge_quant_v0_query_detail::addDown(
                 approximate_lower,
@@ -433,6 +480,12 @@ class EdgeQuantV0QueryContext {
         if (!std::isfinite(
                 result.residual_direction_inner_product_upper) ||
             !std::isfinite(approximate_lower) ||
+            !std::isfinite(direction_error_radius_upper) ||
+            direction_error_radius_upper < 0.0 ||
+            !std::isfinite(operational_l2_padding) ||
+            operational_l2_padding < 0.0 ||
+            !std::isfinite(result.rounding_closure_padding) ||
+            result.rounding_closure_padding < 0.0 ||
             !std::isfinite(error_radius_upper) ||
             error_radius_upper < 0.0 ||
             !std::isfinite(lower_bound)) {

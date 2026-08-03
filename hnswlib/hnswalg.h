@@ -621,6 +621,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                                 static_cast<double>(candidate_dist));
                             if (v0_bound.valid()) {
                                 ++v0_metrics->bound_evaluated;
+                                if (v0_bound.approximate_squared_distance >
+                                    static_cast<double>(lowerBound)) {
+                                    ++v0_metrics->raw_prunable;
+                                }
                                 v0_would_prune =
                                     v0_bound.provesFartherThan(
                                         static_cast<double>(lowerBound));
@@ -697,6 +701,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                             v0_would_prune &&
                             exact_squared_distance <=
                                 static_cast<double>(lowerBound);
+                        const bool oracle_would_prune =
+                            v0_bound.valid() &&
+                            exact_squared_distance >
+                                static_cast<double>(lowerBound);
+                        if (oracle_would_prune) {
+                            ++v0_metrics->oracle_prunable;
+                        }
                         if (lower_bound_violation) {
                             ++v0_metrics->lower_bound_violation;
                         }
@@ -710,14 +721,43 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                                 static_cast<uint64_t>(current_node_id);
                             record.candidate_id =
                                 static_cast<uint64_t>(candidate_id);
+                            record.graph_layer = 0U;
                             record.bound_status =
                                 static_cast<uint8_t>(v0_bound.status);
                             record.current_squared_distance =
                                 static_cast<double>(candidate_dist);
                             record.threshold =
                                 static_cast<double>(lowerBound);
+                            record.edge_length =
+                                v0_bound.edge_length;
+                            record.direction_error =
+                                v0_bound.direction_error;
+                            record.anchor_projection =
+                                v0_bound.anchor_projection;
+                            record.anchor_projection_lower =
+                                v0_bound.anchor_projection_lower;
+                            record.query_direction_inner_product_upper =
+                                v0_bound.query_direction_inner_product_upper;
+                            record.residual_direction_inner_product_upper =
+                                v0_bound.residual_direction_inner_product_upper;
+                            record.length_squared_lower =
+                                v0_bound.length_squared_lower;
+                            record.cross_term_upper =
+                                v0_bound.cross_term_upper;
+                            record.base_plus_length_lower =
+                                v0_bound.base_plus_length_lower;
                             record.approximate_squared_distance =
                                 v0_bound.approximate_squared_distance;
+                            record.current_distance_root_upper =
+                                v0_bound.current_distance_root_upper;
+                            record.direction_error_radius =
+                                v0_bound.direction_error_radius;
+                            record.stored_numeric_padding =
+                                v0_bound.stored_numeric_padding;
+                            record.operational_l2_padding =
+                                v0_bound.operational_l2_padding;
+                            record.rounding_closure_padding =
+                                v0_bound.rounding_closure_padding;
                             record.error_radius =
                                 v0_bound.error_radius;
                             record.lower_bound =
@@ -725,6 +765,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                             record.shadow_exact_squared_distance =
                                 exact_squared_distance;
                             record.would_prune = v0_would_prune;
+                            record.oracle_would_prune =
+                                oracle_would_prune;
                             record.lower_bound_valid =
                                 v0_bound.valid();
                             record.lower_bound_violation =
