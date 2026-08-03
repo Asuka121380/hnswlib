@@ -54,7 +54,10 @@ def main() -> int:
             writer.writerow([1, 1.0, 1.0, 1, 1, 2, 2, 0, 0, 0, 0, 0, 0])
         write_json(run / "summary.json", {
             "status": "valid", "query_count": 2, "mismatch_queries": 0,
-            "bound_evaluated": 4, "exact_distance_saved": 0,
+            # exact_fallback deliberately includes five pre-threshold events
+            # where no bound was attempted and therefore no shadow row exists.
+            "bound_evaluated": 4, "exact_fallback": 5,
+            "exact_only_fallback": 0, "exact_distance_saved": 0,
             "lower_bound_violation": 0, "false_prune": 0,
             "shadow_records_seen": 4, "shadow_records_written": 4,
         })
