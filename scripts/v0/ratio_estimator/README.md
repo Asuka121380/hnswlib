@@ -161,3 +161,45 @@ sbatch scripts/v0/ratio_estimator/run_phase2_calibration.slurm
 
 The job runs both synthetic test suites before calibration and writes a
 SHA-256 inventory for all Phase-2 artifacts.
+
+## Phase 3 offline pruning simulation
+
+Phase 3 reads the exact frozen Phase-2 calibrator files and applies them to
+the frozen test split. It never accepts a quantile on the command line and
+never changes HNSW traversal. A simulated prune uses the strict runtime
+comparison `LB > threshold`; invalid or low-kappa records use the existing
+current lower bound and remain in every denominator.
+
+```bash
+python scripts/v0/ratio_estimator/simulate_probabilistic_pruning.py \
+  --input /path/to/RUN_ID/raw/cap_diagnostic_input.csv \
+  --phase1-dir /path/to/RUN_ID/phase1 \
+  --phase2-dir /path/to/RUN_ID/phase2 \
+  --output-dir /path/to/RUN_ID/phase3 \
+  --metadata /path/to/RUN_ID/raw/metadata.json \
+  --query-metrics /path/to/RUN_ID/raw/query_metrics.csv
+```
+
+The report compares current LB, optional cap LB, the raw point estimate,
+record/query calibrated bounds, and the oracle on identical sampled records.
+It reports potential (not realized) exact-distance savings, extra coverage,
+oracle recovery, false-prune event/decision/query exposure, margin behavior,
+query concentration, and kappa-conditioned precision. Adjacent kappa values
+are sensitivity-only and cannot affect the formal decision or selected points.
+
+At most three Phase-4 candidates are frozen as conservative, balanced, and
+aggressive. Since this selection compares held-out Phase-3 outcomes, Phase 4
+must use fresh final-evaluation queries. A Phase-3 Go means only that potential
+record-level benefit exists on the unchanged observe-only trajectory; it is
+not a recall or speedup result.
+
+For SLURM, set `REPO_ROOT`, `INPUT_CSV`, `PHASE1_DIR`, `PHASE2_DIR`, and
+`OUTPUT_DIR`, then submit:
+
+```bash
+sbatch scripts/v0/ratio_estimator/run_phase3_simulation.slurm
+```
+
+Optional variables are `PYTHON_BIN`, `RAW_METADATA`, `QUERY_METRICS`, and
+`SENSITIVITY_KAPPA`. The job runs all three synthetic suites and hashes every
+Phase-3 artifact even when the valid scientific decision is No-Go (exit 3).
