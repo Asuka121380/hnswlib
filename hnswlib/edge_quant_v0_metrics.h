@@ -57,6 +57,19 @@ struct V0ShadowRecord {
     bool lower_bound_valid = false;
     bool lower_bound_violation = false;
     bool false_prune = false;
+#ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
+    // Phase-1 only: raw sampled-edge geometry for the independent offline
+    // evaluator. These values never participate in search decisions.
+    double cap_reconstruction_norm = 0.0;
+    double cap_x_norm = 0.0;
+    double cap_x_dot_reconstruction = 0.0;
+    double cap_true_edge_norm = 0.0;
+    double cap_x_dot_true_direction = 0.0;
+    double cap_actual_direction_error = 0.0;
+    double cap_certificate_slack = 0.0;
+    bool cap_diagnostic_selected = false;
+    bool cap_diagnostic_valid = false;
+#endif
 };
 
 // Optional sink for detailed validation. Implementations decide whether to
@@ -64,6 +77,17 @@ struct V0ShadowRecord {
 class V0ShadowValidationCollector {
  public:
     virtual ~V0ShadowValidationCollector() {}
+#ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
+    virtual bool wantsSphericalCapDiagnostic(
+        uint64_t query_id,
+        uint64_t current_node_id,
+        uint64_t candidate_id) const {
+        (void)query_id;
+        (void)current_node_id;
+        (void)candidate_id;
+        return false;
+    }
+#endif
     virtual void append(const V0ShadowRecord& record) = 0;
 };
 #endif

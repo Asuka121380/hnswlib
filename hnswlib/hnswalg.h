@@ -19,6 +19,9 @@
 #include "edge_quant_v0_metadata.h"
 #include "edge_quant_v0_metrics.h"
 #include "edge_quant_v0_query_metadata.h"
+#ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
+#include "edge_quant_v0_cap_diagnostic.h"
+#endif
 #endif
 
 namespace hnswlib {
@@ -772,6 +775,51 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                             record.lower_bound_violation =
                                 lower_bound_violation;
                             record.false_prune = false_prune;
+#ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
+                            record.cap_diagnostic_selected =
+                                v0_shadow->wantsSphericalCapDiagnostic(
+                                    record.query_id,
+                                    record.current_node_id,
+                                    record.candidate_id);
+                            if (record.cap_diagnostic_selected) {
+                                try {
+                                    const V0SphericalCapDiagnosticInput
+                                        cap_input =
+                                            computeV0SphericalCapDiagnosticInput(
+                                                static_cast<const float*>(
+                                                    data_point),
+                                                reinterpret_cast<const float*>(
+                                                    getDataByInternalId(
+                                                        current_node_id)),
+                                                reinterpret_cast<const float*>(
+                                                    currObj1),
+                                                getEdgeQuantV0Metadata().view(),
+                                                getEdgeQuantV0Record(
+                                                    current_node_id,
+                                                    j - 1U));
+                                    record.cap_reconstruction_norm =
+                                        cap_input.reconstruction_norm;
+                                    record.cap_x_norm = cap_input.x_norm;
+                                    record.cap_x_dot_reconstruction =
+                                        cap_input.x_dot_reconstruction;
+                                    record.cap_true_edge_norm =
+                                        cap_input.true_edge_norm;
+                                    record.cap_x_dot_true_direction =
+                                        cap_input.x_dot_true_direction;
+                                    record.cap_actual_direction_error =
+                                        cap_input.actual_direction_error;
+                                    record.cap_certificate_slack =
+                                        record.direction_error -
+                                        record.cap_actual_direction_error;
+                                    record.cap_diagnostic_valid =
+                                        cap_input.valid &&
+                                        std::isfinite(
+                                            record.cap_certificate_slack);
+                                } catch (const std::exception&) {
+                                    record.cap_diagnostic_valid = false;
+                                }
+                            }
+#endif
                             v0_shadow->append(record);
                         }
                     }

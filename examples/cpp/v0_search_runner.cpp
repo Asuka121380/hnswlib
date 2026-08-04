@@ -75,6 +75,12 @@ struct Totals {
     uint64_t false_prune = 0;
     uint64_t shadow_records_seen = 0;
     uint64_t shadow_records_written = 0;
+#ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
+    uint64_t cap_records_selected = 0;
+    uint64_t cap_records_valid = 0;
+    uint64_t cap_records_invalid = 0;
+    uint64_t cap_certificate_failure = 0;
+#endif
     double baseline_recall_sum = 0.0;
     double v0_recall_sum = 0.0;
 };
@@ -538,8 +544,14 @@ class CsvShadowCollector :
         size_t ef_search,
         size_t modulus,
         size_t remainder,
+#ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
+        const std::string& cap_path,
+#endif
         Totals* totals)
         : output_(path.c_str()),
+#ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
+          cap_output_(cap_path.c_str()),
+#endif
           run_id_(run_id),
           ef_search_(ef_search),
           modulus_(modulus),
@@ -549,6 +561,23 @@ class CsvShadowCollector :
             throw std::runtime_error(
                 "Cannot create shadow_records.csv");
         }
+#ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
+        if (!cap_output_) {
+            throw std::runtime_error(
+                "Cannot create cap_diagnostic_input.csv");
+        }
+        cap_output_
+            << "cap_input_schema_version,run_id,query_id,current_node_id,"
+            << "candidate_id,graph_layer,bound_status,ef_search,"
+            << "current_squared_distance,threshold,edge_length,"
+            << "direction_error,anchor_projection,current_lb,"
+            << "exact_squared_distance,current_would_prune,"
+            << "raw_would_prune,oracle_would_prune,"
+            << "reconstruction_norm,x_norm,x_dot_r,"
+            << "true_edge_norm,x_dot_true_direction,"
+            << "actual_direction_error,certificate_slack,"
+            << "diagnostic_valid\n";
+#endif
         output_
             << "schema_version,run_id,query_id,current_node_id,"
             << "candidate_id,graph_layer,bound_status,ef_search,"
@@ -570,14 +599,68 @@ class CsvShadowCollector :
             << "repr_lb_star_would_prune\n";
     }
 
+#ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
+    bool wantsSphericalCapDiagnostic(
+        uint64_t query_id,
+        uint64_t current_node_id,
+        uint64_t candidate_id) const override {
+        return isSampled(query_id, current_node_id, candidate_id);
+    }
+#endif
+
     void append(const hnswlib::V0ShadowRecord& record) {
         ++totals_->shadow_records_seen;
-        uint64_t key = mix64(record.query_id);
-        key ^= mix64(record.current_node_id + 0x632be59bd9b4e019ULL);
-        key ^= mix64(record.candidate_id + 0x8cb92baa3f3d8dd7ULL);
-        const bool sampled =
-            key % static_cast<uint64_t>(modulus_) ==
-            static_cast<uint64_t>(remainder_);
+        const bool sampled = isSampled(
+            record.query_id,
+            record.current_node_id,
+            record.candidate_id);
+#ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
+        if (record.cap_diagnostic_selected) {
+            ++totals_->cap_records_selected;
+            if (record.cap_diagnostic_valid) {
+                ++totals_->cap_records_valid;
+                if (record.cap_certificate_slack < 0.0) {
+                    ++totals_->cap_certificate_failure;
+                }
+            } else {
+                ++totals_->cap_records_invalid;
+            }
+            cap_output_
+                << 1U << ','
+                << csvEscape(run_id_) << ','
+                << record.query_id << ','
+                << record.current_node_id << ','
+                << record.candidate_id << ','
+                << record.graph_layer << ','
+                << static_cast<unsigned int>(record.bound_status) << ','
+                << ef_search_ << ','
+                << std::setprecision(17)
+                << record.current_squared_distance << ','
+                << record.threshold << ','
+                << record.edge_length << ','
+                << record.direction_error << ','
+                << record.anchor_projection << ','
+                << record.lower_bound << ','
+                << record.shadow_exact_squared_distance << ','
+                << (record.would_prune ? 1 : 0) << ','
+                << (record.lower_bound_valid &&
+                        record.approximate_squared_distance > record.threshold ?
+                            1 : 0) << ','
+                << (record.oracle_would_prune ? 1 : 0) << ','
+                << record.cap_reconstruction_norm << ','
+                << record.cap_x_norm << ','
+                << record.cap_x_dot_reconstruction << ','
+                << record.cap_true_edge_norm << ','
+                << record.cap_x_dot_true_direction << ','
+                << record.cap_actual_direction_error << ','
+                << record.cap_certificate_slack << ','
+                << (record.cap_diagnostic_valid ? 1 : 0) << '\n';
+            if (!cap_output_) {
+                throw std::runtime_error(
+                    "Cannot write cap_diagnostic_input.csv");
+            }
+        }
+#endif
         if (!sampled && !record.lower_bound_violation &&
             !record.false_prune) {
             return;
@@ -633,10 +716,31 @@ class CsvShadowCollector :
             throw std::runtime_error(
                 "Cannot flush shadow_records.csv");
         }
+#ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
+        cap_output_.flush();
+        if (!cap_output_) {
+            throw std::runtime_error(
+                "Cannot flush cap_diagnostic_input.csv");
+        }
+#endif
     }
 
  private:
+    bool isSampled(
+        uint64_t query_id,
+        uint64_t current_node_id,
+        uint64_t candidate_id) const {
+        uint64_t key = mix64(query_id);
+        key ^= mix64(current_node_id + 0x632be59bd9b4e019ULL);
+        key ^= mix64(candidate_id + 0x8cb92baa3f3d8dd7ULL);
+        return key % static_cast<uint64_t>(modulus_) ==
+            static_cast<uint64_t>(remainder_);
+    }
+
     std::ofstream output_;
+#ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
+    std::ofstream cap_output_;
+#endif
     std::string run_id_;
     size_t ef_search_;
     size_t modulus_;
@@ -674,7 +778,12 @@ void writeMetadata(
         << "  \"format\": \"hnswlib_v0_search_run\",\n"
         << "  \"format_version\": 2,\n"
         << "  \"shadow_schema_version\": 2,\n"
+#ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
+        << "  \"cap_input_schema_version\": 1,\n"
+        << "  \"enabled_methods\": [\"current\", \"cap_phase1_export\"],\n"
+#else
         << "  \"enabled_methods\": [\"current\"],\n"
+#endif
         << "  \"validation_tolerance\": 0.0,\n"
         << "  \"dataset\": \"" << jsonEscape(dataset.dataset) << "\",\n"
         << "  \"mode\": \"" << jsonEscape(options.mode) << "\",\n"
@@ -728,6 +837,11 @@ void writeMetadata(
         << "  \"shadow_validation_compiled\": true,\n"
 #else
         << "  \"shadow_validation_compiled\": false,\n"
+#endif
+#ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
+        << "  \"spherical_cap_diagnostic_compiled\": true,\n"
+#else
+        << "  \"spherical_cap_diagnostic_compiled\": false,\n"
 #endif
 #ifdef HNSWLIB_ENABLE_V0_REAL_PRUNING
         << "  \"real_pruning_compiled\": true\n"
@@ -789,7 +903,20 @@ bool writeSummary(
         << "  \"shadow_records_seen\": "
         << totals.shadow_records_seen << ",\n"
         << "  \"shadow_records_written\": "
-        << totals.shadow_records_written << "\n"
+        << totals.shadow_records_written
+#ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
+        << ",\n"
+        << "  \"cap_records_selected\": "
+        << totals.cap_records_selected << ",\n"
+        << "  \"cap_records_valid\": "
+        << totals.cap_records_valid << ",\n"
+        << "  \"cap_records_invalid\": "
+        << totals.cap_records_invalid << ",\n"
+        << "  \"cap_certificate_failure\": "
+        << totals.cap_certificate_failure << "\n"
+#else
+        << "\n"
+#endif
         << "}\n";
     return valid;
 }
@@ -872,6 +999,9 @@ void run(const Options& options) {
             options.ef_search,
             options.shadow_sample_modulus,
             options.shadow_sample_remainder,
+#ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
+            options.output_dir + "/cap_diagnostic_input.csv",
+#endif
             &totals));
     }
 #endif
