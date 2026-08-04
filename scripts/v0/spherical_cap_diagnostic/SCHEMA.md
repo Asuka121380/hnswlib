@@ -1,6 +1,6 @@
 # Spherical-cap Phase-1 schemas
 
-## `cap_diagnostic_input.csv` (schema version 1)
+## `cap_diagnostic_input.csv` (schema version 2)
 
 This file is produced by the C++ observe-only runner for deterministically
 sampled bound attempts.
@@ -13,6 +13,7 @@ sampled bound attempts.
 | `threshold` | Search rejection threshold \(\tau\). |
 | `current_lb` | Existing strict floating-point V0 LB; unchanged by this feature. |
 | `exact_squared_distance` | Operational exact candidate squared distance computed by HNSW. |
+| `geometric_squared_distance` | Diagnostic squared distance recomputed directly from query/candidate coordinates with long-double accumulation. This closes against the exported edge geometry and does not participate in search decisions. |
 | `reconstruction_norm` | \(s=\lVert r\rVert\), reconstructed from the sampled PQ code and codebook with long-double accumulation. |
 | `x_norm` | \(n=\lVert q-c\rVert\), recomputed directly from vectors. |
 | `x_dot_r` | \(x^\top r\), recomputed directly from vectors and reconstructed PQ coordinates. |

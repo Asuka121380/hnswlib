@@ -806,6 +806,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                                         cap_input.true_edge_norm;
                                     record.cap_x_dot_true_direction =
                                         cap_input.x_dot_true_direction;
+                                    record.cap_geometric_squared_distance =
+                                        cap_input.geometric_squared_distance;
                                     record.cap_actual_direction_error =
                                         cap_input.actual_direction_error;
                                     record.cap_certificate_slack =

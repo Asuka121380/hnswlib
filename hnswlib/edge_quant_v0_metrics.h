@@ -65,6 +65,7 @@ struct V0ShadowRecord {
     double cap_x_dot_reconstruction = 0.0;
     double cap_true_edge_norm = 0.0;
     double cap_x_dot_true_direction = 0.0;
+    double cap_geometric_squared_distance = 0.0;
     double cap_actual_direction_error = 0.0;
     double cap_certificate_slack = 0.0;
     bool cap_diagnostic_selected = false;

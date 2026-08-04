@@ -61,6 +61,8 @@ void testRawGeometryExport() {
     requireNear(input.true_edge_norm, 1.0, "true edge norm mismatch");
     requireNear(input.x_dot_true_direction, 1.0,
                 "true direction support mismatch");
+    requireNear(input.geometric_squared_distance, 3.0,
+                "geometric squared distance mismatch");
     requireNear(input.actual_direction_error, 1.0,
                 "actual direction error mismatch");
 

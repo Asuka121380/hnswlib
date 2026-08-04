@@ -17,6 +17,7 @@ struct V0SphericalCapDiagnosticInput {
     double x_dot_reconstruction = 0.0;
     double true_edge_norm = 0.0;
     double x_dot_true_direction = 0.0;
+    double geometric_squared_distance = 0.0;
     double actual_direction_error = 0.0;
     bool valid = false;
 };
@@ -44,6 +45,7 @@ computeV0SphericalCapDiagnosticInput(
     long double x_dot_reconstruction = 0.0L;
     long double true_edge_squared = 0.0L;
     long double x_dot_true_edge = 0.0L;
+    long double geometric_squared_distance = 0.0L;
     for (uint32_t coordinate = 0U;
          coordinate < header.dimension;
          ++coordinate) {
@@ -65,11 +67,14 @@ computeV0SphericalCapDiagnosticInput(
         const long double true_edge =
             static_cast<long double>(candidate[coordinate]) -
             static_cast<long double>(current[coordinate]);
+        const long double query_minus_candidate = x - true_edge;
         x_squared += x * x;
         reconstruction_squared += reconstruction * reconstruction;
         x_dot_reconstruction += x * reconstruction;
         true_edge_squared += true_edge * true_edge;
         x_dot_true_edge += x * true_edge;
+        geometric_squared_distance +=
+            query_minus_candidate * query_minus_candidate;
     }
 
     const long double x_norm = std::sqrt(x_squared);
@@ -110,6 +115,8 @@ computeV0SphericalCapDiagnosticInput(
     result.true_edge_norm = static_cast<double>(true_edge_norm);
     result.x_dot_true_direction =
         static_cast<double>(x_dot_true_edge / true_edge_norm);
+    result.geometric_squared_distance =
+        static_cast<double>(geometric_squared_distance);
     result.actual_direction_error = static_cast<double>(actual_error);
     result.valid =
         std::isfinite(result.reconstruction_norm) &&
@@ -117,6 +124,7 @@ computeV0SphericalCapDiagnosticInput(
         std::isfinite(result.x_dot_reconstruction) &&
         std::isfinite(result.true_edge_norm) &&
         std::isfinite(result.x_dot_true_direction) &&
+        std::isfinite(result.geometric_squared_distance) &&
         std::isfinite(result.actual_direction_error);
     return result;
 }

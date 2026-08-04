@@ -571,7 +571,8 @@ class CsvShadowCollector :
             << "candidate_id,graph_layer,bound_status,ef_search,"
             << "current_squared_distance,threshold,edge_length,"
             << "direction_error,anchor_projection,current_lb,"
-            << "exact_squared_distance,current_would_prune,"
+            << "exact_squared_distance,geometric_squared_distance,"
+            << "current_would_prune,"
             << "raw_would_prune,oracle_would_prune,"
             << "reconstruction_norm,x_norm,x_dot_r,"
             << "true_edge_norm,x_dot_true_direction,"
@@ -626,7 +627,7 @@ class CsvShadowCollector :
                 ++totals_->cap_records_invalid;
             }
             cap_output_
-                << 1U << ','
+                << 2U << ','
                 << csvEscape(run_id_) << ','
                 << record.query_id << ','
                 << record.current_node_id << ','
@@ -642,6 +643,7 @@ class CsvShadowCollector :
                 << record.anchor_projection << ','
                 << record.lower_bound << ','
                 << record.shadow_exact_squared_distance << ','
+                << record.cap_geometric_squared_distance << ','
                 << (record.would_prune ? 1 : 0) << ','
                 << (record.lower_bound_valid &&
                         record.approximate_squared_distance > record.threshold ?
@@ -779,7 +781,7 @@ void writeMetadata(
         << "  \"format_version\": 2,\n"
         << "  \"shadow_schema_version\": 2,\n"
 #ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
-        << "  \"cap_input_schema_version\": 1,\n"
+        << "  \"cap_input_schema_version\": 2,\n"
         << "  \"enabled_methods\": [\"current\", \"cap_phase1_export\"],\n"
 #else
         << "  \"enabled_methods\": [\"current\"],\n"
