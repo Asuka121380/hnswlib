@@ -559,9 +559,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             throw std::invalid_argument(
                 "V0 search requires query context and metrics");
         }
+        bool v0_ratio_defer_current_bound = false;
 #ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
         const bool v0_ratio_active =
             use_edge_quant_v0 && v0_ratio_calibrator != nullptr;
+#ifdef HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING
+        v0_ratio_defer_current_bound =
+            v0_ratio_active && v0_ratio_enable_real_pruning;
+#endif
         if (v0_ratio_active &&
             (v0_ratio_query == nullptr || v0_ratio_metrics == nullptr ||
              !v0_ratio_calibrator->validated())) {
@@ -680,7 +685,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         // exact fallback and preserves the original path.
                         if (top_candidates.size() < ef) {
                             ++v0_metrics->exact_fallback;
-                        } else {
+                        } else if (!v0_ratio_defer_current_bound) {
                             v0_bound_attempted = true;
                             v0_bound = v0_query->evaluate(
                                 getEdgeQuantV0Record(
@@ -721,19 +726,23 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         } else {
                             v0_ratio_bound_attempted = true;
                             ++v0_ratio_metrics->ratio_bound_evaluated;
+                            const V0EdgeRecordView ratio_edge_record =
+                                getEdgeQuantV0Record(
+                                    current_node_id, j - 1U);
+#ifdef HNSWLIB_ENABLE_V0_RATIO_FINE_GRAINED_TIMING
                             const std::chrono::steady_clock::time_point
                                 ratio_start =
                                     std::chrono::steady_clock::now();
+#endif
                             const V0RatioEstimate estimate =
                                 v0_ratio_query->evaluate(
-                                    getEdgeQuantV0Record(
-                                        current_node_id, j - 1U),
+                                    ratio_edge_record,
                                     static_cast<double>(candidate_dist),
                                     v0_ratio_calibrator->kappaMin());
-                            v0_ratio_bound = evaluateV0RatioBound(
+                            v0_ratio_bound = evaluateV0RatioPrimaryBound(
                                 estimate,
-                                *v0_ratio_calibrator,
-                                v0_bound);
+                                *v0_ratio_calibrator);
+#ifdef HNSWLIB_ENABLE_V0_RATIO_FINE_GRAINED_TIMING
                             const std::chrono::steady_clock::time_point
                                 ratio_end =
                                     std::chrono::steady_clock::now();
@@ -742,10 +751,69 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                                     std::chrono::duration_cast<
                                         std::chrono::nanoseconds>(
                                             ratio_end - ratio_start).count());
+#endif
                             if (v0_ratio_bound.ratio_eligible) {
                                 ++v0_ratio_metrics->ratio_eligible;
+                                ++v0_ratio_metrics->
+                                    ratio_current_lb_skipped_eligible;
                             } else {
                                 ++v0_ratio_metrics->ratio_invalid_fallback;
+                                ++v0_ratio_metrics->
+                                    ratio_current_lb_evaluated;
+                                if (!v0_bound_attempted) {
+                                    v0_bound_attempted = true;
+#ifdef HNSWLIB_ENABLE_V0_RATIO_FINE_GRAINED_TIMING
+                                    const std::chrono::steady_clock::time_point
+                                        current_lb_start =
+                                            std::chrono::steady_clock::now();
+#endif
+                                    v0_bound = v0_query->evaluate(
+                                        ratio_edge_record,
+                                        static_cast<double>(candidate_dist));
+#ifdef HNSWLIB_ENABLE_V0_RATIO_FINE_GRAINED_TIMING
+                                    const std::chrono::steady_clock::time_point
+                                        current_lb_end =
+                                            std::chrono::steady_clock::now();
+                                    v0_ratio_metrics->current_lb_time_ns +=
+                                        static_cast<uint64_t>(
+                                            std::chrono::duration_cast<
+                                                std::chrono::nanoseconds>(
+                                                    current_lb_end -
+                                                    current_lb_start).count());
+#endif
+                                    if (v0_bound.valid()) {
+                                        ++v0_metrics->bound_evaluated;
+                                        if (v0_bound.
+                                                approximate_squared_distance >
+                                            static_cast<double>(lowerBound)) {
+                                            ++v0_metrics->raw_prunable;
+                                        }
+                                        v0_would_prune =
+                                            v0_bound.provesFartherThan(
+                                                static_cast<double>(
+                                                    lowerBound));
+                                        if (v0_would_prune) {
+                                            ++v0_metrics->bound_pruned;
+                                        }
+                                    } else if (
+                                        v0_bound.status ==
+                                            V0BoundStatus::ExactOnly ||
+                                        v0_bound.status ==
+                                            V0BoundStatus::ZeroLength) {
+                                        ++v0_metrics->exact_only_fallback;
+                                    } else {
+                                        ++v0_metrics->exact_fallback;
+                                    }
+                                }
+                                if (v0_bound.valid()) {
+                                    ++v0_ratio_metrics->
+                                        ratio_current_lb_valid;
+                                } else {
+                                    ++v0_ratio_metrics->
+                                        ratio_current_lb_invalid;
+                                }
+                                applyV0RatioCurrentBoundFallback(
+                                    v0_ratio_bound, v0_bound);
                             }
                             if (v0_ratio_bound.current_lb_fallback) {
                                 ++v0_ratio_metrics->
@@ -815,7 +883,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
 
                     char *currObj1 = (getDataByInternalId(candidate_id));
-#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+#ifdef HNSWLIB_ENABLE_V0_RATIO_FINE_GRAINED_TIMING
                     std::chrono::steady_clock::time_point
                         v0_ratio_exact_start;
                     if (v0_ratio_active) {
@@ -831,7 +899,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);
 #endif
 
-#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+#ifdef HNSWLIB_ENABLE_V0_RATIO_FINE_GRAINED_TIMING
                     if (v0_ratio_active) {
                         const std::chrono::steady_clock::time_point
                             v0_ratio_exact_end =

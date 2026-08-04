@@ -110,6 +110,12 @@ void testStrictDecisionAndCurrentFallback() {
     hnswlib::V0BoundResult current;
     current.status = hnswlib::V0BoundStatus::Valid;
     current.lower_bound = 4.0;
+    const hnswlib::V0RatioBoundResult primary =
+        hnswlib::evaluateV0RatioPrimaryBound(estimate, calibrator);
+    v0_test::require(
+        primary.ratio_eligible && !primary.current_lb_fallback &&
+            primary.effective_lower_bound == 5.0,
+        "eligible primary ratio bound unexpectedly used current LB");
     const hnswlib::V0RatioBoundResult bound =
         hnswlib::evaluateV0RatioBound(estimate, calibrator, current);
     v0_test::require(
@@ -119,12 +125,34 @@ void testStrictDecisionAndCurrentFallback() {
         "ratio decision is not strict at equality");
 
     estimate.status = hnswlib::V0RatioEstimatorStatus::NumericFailure;
-    const hnswlib::V0RatioBoundResult fallback =
-        hnswlib::evaluateV0RatioBound(estimate, calibrator, current);
+    hnswlib::V0RatioBoundResult fallback =
+        hnswlib::evaluateV0RatioPrimaryBound(estimate, calibrator);
+    v0_test::require(
+        !fallback.ratio_eligible && !fallback.effective_bound_valid,
+        "invalid primary ratio bound did not fail closed");
+    hnswlib::applyV0RatioCurrentBoundFallback(fallback, current);
     v0_test::require(
         fallback.current_lb_fallback &&
             fallback.effective_lower_bound == 4.0,
         "invalid ratio estimate did not use current LB fallback");
+
+    hnswlib::V0RatioBoundResult unchanged = primary;
+    hnswlib::applyV0RatioCurrentBoundFallback(unchanged, current);
+    v0_test::require(
+        unchanged.ratio_eligible && !unchanged.current_lb_fallback &&
+            unchanged.effective_lower_bound == primary.effective_lower_bound,
+        "current fallback overwrote an eligible ratio bound");
+
+    hnswlib::V0BoundResult invalid_current;
+    invalid_current.status = hnswlib::V0BoundStatus::NumericFailure;
+    hnswlib::V0RatioBoundResult exact_fallback =
+        hnswlib::evaluateV0RatioPrimaryBound(estimate, calibrator);
+    hnswlib::applyV0RatioCurrentBoundFallback(
+        exact_fallback, invalid_current);
+    v0_test::require(
+        !exact_fallback.effective_bound_valid &&
+            !exact_fallback.current_lb_fallback,
+        "invalid current LB did not preserve exact fallback");
 }
 
 void writeText(const std::string& path, const std::string& value) {

@@ -125,6 +125,7 @@ def load_runs(paths: list[Path]) -> tuple[pd.DataFrame, pd.DataFrame, list[pd.Da
             "v0_latency_p99_ms": float(query["v0_latency_ns"].quantile(.99)) / 1e6,
             "peak_rss_bytes": int(summary.get("peak_rss_bytes", 0)),
             "sidecar_bytes_per_edge": float(metadata.get("sidecar_bytes_per_edge", math.nan)),
+            "current_lb_time_ns": int(summary.get("current_lb_time_ns", 0)),
             "estimator_time_ns": int(summary.get("estimator_time_ns", 0)),
             "exact_distance_time_ns": int(summary.get("exact_distance_time_ns", 0)),
             "ratio_bound_evaluated": int(summary.get("ratio_bound_evaluated", 0)),
@@ -138,6 +139,10 @@ def load_runs(paths: list[Path]) -> tuple[pd.DataFrame, pd.DataFrame, list[pd.Da
             "ratio_false_prune": int(summary.get("ratio_false_prune", 0)),
             "ratio_false_prune_query_exposure": int(summary.get("ratio_false_prune_query_exposure", 0)),
             "lost_ground_truth_neighbors": int(summary.get("lost_ground_truth_neighbors", 0)),
+            "ratio_current_lb_evaluated": int(summary.get("ratio_current_lb_evaluated", 0)),
+            "ratio_current_lb_skipped_eligible": int(summary.get("ratio_current_lb_skipped_eligible", 0)),
+            "ratio_current_lb_valid": int(summary.get("ratio_current_lb_valid", 0)),
+            "ratio_current_lb_invalid": int(summary.get("ratio_current_lb_invalid", 0)),
             "ratio_current_lb_fallback": int(summary.get("ratio_current_lb_fallback", 0)),
             "ratio_invalid_fallback": int(summary.get("ratio_invalid_fallback", 0)),
             "ratio_trusted": bool(metadata.get("ratio_trusted", False)),
@@ -309,8 +314,11 @@ def main() -> int:
         "mode", "operating_point_id", "ef_search", "repetitions",
         "ratio_bound_evaluated", "ratio_eligible", "ratio_bound_pruned",
         "ratio_exact_distance_saved", "visited_nodes", "candidate_expansions",
+        "ratio_current_lb_evaluated", "ratio_current_lb_skipped_eligible",
+        "ratio_current_lb_valid", "ratio_current_lb_invalid",
         "ratio_current_lb_fallback", "ratio_invalid_fallback",
-        "estimator_time_ns", "exact_distance_time_ns", "exact_savings_percent"}]
+        "current_lb_time_ns", "estimator_time_ns", "exact_distance_time_ns",
+        "exact_savings_percent"}]
     summary[work_columns].to_csv(out / "tables" / "work_counters.csv", index=False)
     runs[runs["mode"] == "ratio-shadow"].to_csv(out / "shadow" / "shadow_run_summary.csv", index=False)
     runs[runs["mode"] == "ratio-prune"].to_csv(out / "real_pruning" / "real_run_summary.csv", index=False)

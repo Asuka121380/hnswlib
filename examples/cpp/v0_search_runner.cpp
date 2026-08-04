@@ -93,6 +93,10 @@ struct Totals {
     uint64_t ratio_bound_evaluated = 0;
     uint64_t ratio_eligible = 0;
     uint64_t ratio_bound_pruned = 0;
+    uint64_t ratio_current_lb_evaluated = 0;
+    uint64_t ratio_current_lb_skipped_eligible = 0;
+    uint64_t ratio_current_lb_valid = 0;
+    uint64_t ratio_current_lb_invalid = 0;
     uint64_t ratio_current_lb_fallback = 0;
     uint64_t ratio_current_lb_fallback_pruned = 0;
     uint64_t ratio_exact_fallback = 0;
@@ -106,6 +110,7 @@ struct Totals {
     uint64_t ratio_false_prune_query_exposure = 0;
     uint64_t visited_nodes = 0;
     uint64_t candidate_expansions = 0;
+    uint64_t current_lb_time_ns = 0;
     uint64_t estimator_time_ns = 0;
     uint64_t exact_distance_time_ns = 0;
     uint64_t lost_ground_truth_neighbors = 0;
@@ -1006,6 +1011,12 @@ void addRatioMetrics(
     totals.ratio_bound_evaluated += metrics.ratio_bound_evaluated;
     totals.ratio_eligible += metrics.ratio_eligible;
     totals.ratio_bound_pruned += metrics.ratio_bound_pruned;
+    totals.ratio_current_lb_evaluated +=
+        metrics.ratio_current_lb_evaluated;
+    totals.ratio_current_lb_skipped_eligible +=
+        metrics.ratio_current_lb_skipped_eligible;
+    totals.ratio_current_lb_valid += metrics.ratio_current_lb_valid;
+    totals.ratio_current_lb_invalid += metrics.ratio_current_lb_invalid;
     totals.ratio_current_lb_fallback +=
         metrics.ratio_current_lb_fallback;
     totals.ratio_current_lb_fallback_pruned +=
@@ -1021,6 +1032,7 @@ void addRatioMetrics(
         metrics.ratio_false_prune != 0U ? 1U : 0U;
     totals.visited_nodes += metrics.visited_nodes;
     totals.candidate_expansions += metrics.candidate_expansions;
+    totals.current_lb_time_ns += metrics.current_lb_time_ns;
     totals.estimator_time_ns += metrics.estimator_time_ns;
     totals.exact_distance_time_ns += metrics.exact_distance_time_ns;
 }
@@ -1199,9 +1211,14 @@ void writeMetadata(
         << "  \"ratio_shadow_compiled\": false,\n"
 #endif
 #ifdef HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING
-        << "  \"ratio_real_pruning_compiled\": true\n"
+        << "  \"ratio_real_pruning_compiled\": true,\n"
 #else
-        << "  \"ratio_real_pruning_compiled\": false\n"
+        << "  \"ratio_real_pruning_compiled\": false,\n"
+#endif
+#ifdef HNSWLIB_ENABLE_V0_RATIO_FINE_GRAINED_TIMING
+        << "  \"ratio_fine_grained_timing_compiled\": true\n"
+#else
+        << "  \"ratio_fine_grained_timing_compiled\": false\n"
 #endif
         << "}\n";
 }
@@ -1211,9 +1228,18 @@ bool writeSummary(
     const Totals& totals) {
     bool valid = false;
 #ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+    const bool ratio_metrics_closed =
+        totals.ratio_current_lb_evaluated ==
+            totals.ratio_invalid_fallback &&
+        totals.ratio_current_lb_valid +
+                totals.ratio_current_lb_invalid ==
+            totals.ratio_current_lb_evaluated &&
+        totals.ratio_current_lb_skipped_eligible ==
+            totals.ratio_eligible;
     if (options.mode == "ratio-shadow") {
         valid =
             totals.mismatch_queries == 0U &&
+            ratio_metrics_closed &&
             totals.ratio_bound_evaluated > 0U &&
             totals.ratio_bound_pruned <= totals.ratio_bound_evaluated &&
             totals.ratio_exact_distance_saved == 0U &&
@@ -1221,6 +1247,7 @@ bool writeSummary(
                 totals.ratio_bound_evaluated;
     } else if (options.mode == "ratio-prune") {
         valid =
+            ratio_metrics_closed &&
             totals.ratio_bound_evaluated > 0U &&
             totals.ratio_bound_pruned <= totals.ratio_bound_evaluated &&
             totals.ratio_bound_pruned ==
@@ -1298,6 +1325,14 @@ bool writeSummary(
         << "  \"ratio_eligible\": " << totals.ratio_eligible << ",\n"
         << "  \"ratio_bound_pruned\": "
         << totals.ratio_bound_pruned << ",\n"
+        << "  \"ratio_current_lb_evaluated\": "
+        << totals.ratio_current_lb_evaluated << ",\n"
+        << "  \"ratio_current_lb_skipped_eligible\": "
+        << totals.ratio_current_lb_skipped_eligible << ",\n"
+        << "  \"ratio_current_lb_valid\": "
+        << totals.ratio_current_lb_valid << ",\n"
+        << "  \"ratio_current_lb_invalid\": "
+        << totals.ratio_current_lb_invalid << ",\n"
         << "  \"ratio_current_lb_fallback\": "
         << totals.ratio_current_lb_fallback << ",\n"
         << "  \"ratio_current_lb_fallback_pruned\": "
@@ -1323,6 +1358,8 @@ bool writeSummary(
         << "  \"visited_nodes\": " << totals.visited_nodes << ",\n"
         << "  \"candidate_expansions\": "
         << totals.candidate_expansions << ",\n"
+        << "  \"current_lb_time_ns\": "
+        << totals.current_lb_time_ns << ",\n"
         << "  \"estimator_time_ns\": "
         << totals.estimator_time_ns << ",\n"
         << "  \"exact_distance_time_ns\": "
@@ -1436,11 +1473,15 @@ void run(const Options& options) {
         << "exact_only_fallback,exact_distance_saved,"
         << "lower_bound_violation,false_prune,"
         << "ratio_bound_evaluated,ratio_eligible,ratio_bound_pruned,"
+        << "ratio_current_lb_evaluated,"
+        << "ratio_current_lb_skipped_eligible,"
+        << "ratio_current_lb_valid,ratio_current_lb_invalid,"
         << "ratio_current_lb_fallback,ratio_current_lb_fallback_pruned,"
         << "ratio_exact_fallback,ratio_invalid_fallback,"
         << "ratio_exact_distance_saved,ratio_oracle_prunable,"
         << "ratio_interval_violation,ratio_false_prune,"
-        << "visited_nodes,candidate_expansions,estimator_time_ns,"
+        << "visited_nodes,candidate_expansions,current_lb_time_ns,"
+        << "estimator_time_ns,"
         << "exact_distance_time_ns\n";
 
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
@@ -1637,6 +1678,10 @@ void run(const Options& options) {
             << ratio_metrics.ratio_bound_evaluated << ','
             << ratio_metrics.ratio_eligible << ','
             << ratio_metrics.ratio_bound_pruned << ','
+            << ratio_metrics.ratio_current_lb_evaluated << ','
+            << ratio_metrics.ratio_current_lb_skipped_eligible << ','
+            << ratio_metrics.ratio_current_lb_valid << ','
+            << ratio_metrics.ratio_current_lb_invalid << ','
             << ratio_metrics.ratio_current_lb_fallback << ','
             << ratio_metrics.ratio_current_lb_fallback_pruned << ','
             << ratio_metrics.ratio_exact_fallback << ','
@@ -1647,10 +1692,11 @@ void run(const Options& options) {
             << ratio_metrics.ratio_false_prune << ','
             << ratio_metrics.visited_nodes << ','
             << ratio_metrics.candidate_expansions << ','
+            << ratio_metrics.current_lb_time_ns << ','
             << ratio_metrics.estimator_time_ns << ','
             << ratio_metrics.exact_distance_time_ns << '\n';
 #else
-            << "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
+            << "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
 #endif
         if (!query_out) {
             throw std::runtime_error(

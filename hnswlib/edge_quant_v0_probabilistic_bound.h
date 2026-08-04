@@ -350,10 +350,9 @@ struct V0RatioBoundResult {
     }
 };
 
-inline V0RatioBoundResult evaluateV0RatioBound(
+inline V0RatioBoundResult evaluateV0RatioPrimaryBound(
     const V0RatioEstimate& estimate,
-    const V0RatioCalibrator& calibrator,
-    const V0BoundResult& current_bound) {
+    const V0RatioCalibrator& calibrator) {
     if (!calibrator.validated()) {
         throw std::invalid_argument(
             "V0 ratio calibrator has not passed validation");
@@ -372,11 +371,29 @@ inline V0RatioBoundResult evaluateV0RatioBound(
             return result;
         }
     }
+    return result;
+}
+
+inline void applyV0RatioCurrentBoundFallback(
+    V0RatioBoundResult& result,
+    const V0BoundResult& current_bound) {
+    if (result.ratio_eligible || result.effective_bound_valid) {
+        return;
+    }
     if (current_bound.valid()) {
         result.effective_lower_bound = current_bound.lower_bound;
         result.current_lb_fallback = true;
         result.effective_bound_valid = true;
     }
+}
+
+inline V0RatioBoundResult evaluateV0RatioBound(
+    const V0RatioEstimate& estimate,
+    const V0RatioCalibrator& calibrator,
+    const V0BoundResult& current_bound) {
+    V0RatioBoundResult result =
+        evaluateV0RatioPrimaryBound(estimate, calibrator);
+    applyV0RatioCurrentBoundFallback(result, current_bound);
     return result;
 }
 
@@ -384,6 +401,10 @@ struct V0RatioQueryMetrics {
     uint64_t ratio_bound_evaluated = 0U;
     uint64_t ratio_eligible = 0U;
     uint64_t ratio_bound_pruned = 0U;
+    uint64_t ratio_current_lb_evaluated = 0U;
+    uint64_t ratio_current_lb_skipped_eligible = 0U;
+    uint64_t ratio_current_lb_valid = 0U;
+    uint64_t ratio_current_lb_invalid = 0U;
     uint64_t ratio_current_lb_fallback = 0U;
     uint64_t ratio_current_lb_fallback_pruned = 0U;
     uint64_t ratio_exact_fallback = 0U;
@@ -394,6 +415,7 @@ struct V0RatioQueryMetrics {
     uint64_t ratio_false_prune = 0U;
     uint64_t visited_nodes = 0U;
     uint64_t candidate_expansions = 0U;
+    uint64_t current_lb_time_ns = 0U;
     uint64_t estimator_time_ns = 0U;
     uint64_t exact_distance_time_ns = 0U;
 

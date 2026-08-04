@@ -49,6 +49,8 @@ void testRealPruningAndMismatchDetection() {
 
     index.setEf(6U);
     uint64_t saved = 0U;
+    uint64_t bound_evaluated = 0U;
+    uint64_t current_lb_evaluated = 0U;
     for (size_t query_id = 0U; query_id < node_count; ++query_id) {
         const float* query = base.data() + query_id * dimension;
         const std::priority_queue<std::pair<float, hnswlib::labeltype> >
@@ -63,9 +65,32 @@ void testRealPruningAndMismatchDetection() {
         v0_test::require(
             metrics.ratio_bound_pruned == metrics.exact_distance_saved,
             "ratio pruned/saved counters diverged");
+        v0_test::require(
+            metrics.ratio_current_lb_evaluated ==
+                    metrics.ratio_invalid_fallback &&
+                metrics.ratio_current_lb_valid +
+                        metrics.ratio_current_lb_invalid ==
+                    metrics.ratio_current_lb_evaluated &&
+                metrics.ratio_current_lb_skipped_eligible ==
+                    metrics.ratio_eligible &&
+                metrics.ratio_current_lb_valid ==
+                    metrics.ratio_current_lb_fallback,
+            "lazy current-LB counters do not close");
+#ifndef HNSWLIB_ENABLE_V0_RATIO_FINE_GRAINED_TIMING
+        v0_test::require(
+            metrics.current_lb_time_ns == 0U &&
+                metrics.estimator_time_ns == 0U &&
+                metrics.exact_distance_time_ns == 0U,
+            "performance build executed fine-grained timing");
+#endif
         saved += metrics.exact_distance_saved;
+        bound_evaluated += metrics.ratio_bound_evaluated;
+        current_lb_evaluated += metrics.ratio_current_lb_evaluated;
     }
     v0_test::require(saved > 0U, "ratio real pruning saved no distances");
+    v0_test::require(
+        bound_evaluated > 0U && current_lb_evaluated < bound_evaluated,
+        "eligible ratio path did not skip eager current-LB evaluation");
 
     const hnswlib::V0RatioCalibrator unsafe =
         hnswlib::V0RatioCalibrator::forTesting(

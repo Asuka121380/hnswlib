@@ -211,12 +211,13 @@ HNSW candidate loop. The sidecar format remains unchanged: a query-independent
 codeword-norm LUT is built when the validated V0 sidecar is loaded, and a
 query-specific dot-product LUT is built once per search.
 
-Three compile-time flags are default-off:
+Four compile-time flags are default-off:
 
 ```text
 HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
 HNSWLIB_ENABLE_V0_RATIO_SHADOW
 HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING
+HNSWLIB_ENABLE_V0_RATIO_FINE_GRAINED_TIMING
 ```
 
 Shadow and real-pruning builds must be separate. Shadow always computes the
@@ -226,6 +227,15 @@ distance only when the validated effective lower bound is strictly greater
 than the current threshold. Invalid estimator inputs fail closed to the
 existing current lower bound. A diagnostic-only operating point is rejected
 unless explicitly enabled for the aggressive sensitivity run.
+
+The real-pruning hot path evaluates the current lower bound lazily: an eligible
+ratio estimate never computes it, while an invalid ratio estimate computes it
+once before falling back to the exact distance. Candidate-level clock reads are
+compiled only when `HNSWLIB_ENABLE_V0_RATIO_FINE_GRAINED_TIMING=ON`; leave this
+flag OFF for QPS and latency measurements. The summary counters
+`ratio_current_lb_evaluated`, `ratio_current_lb_skipped_eligible`,
+`ratio_current_lb_valid`, and `ratio_current_lb_invalid` make the lazy path
+auditable.
 
 Build and test the two configurations independently, for example:
 
