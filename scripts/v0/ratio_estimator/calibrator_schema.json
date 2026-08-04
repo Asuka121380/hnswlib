@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/hnswlib/v0-ratio-probabilistic-calibrator-v1.schema.json",
+  "title": "V0 ratio probabilistic calibrator",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "format_version",
+    "phase2_version",
+    "calibrator_id",
+    "status",
+    "calibration_level",
+    "nominal_alpha",
+    "sample_count",
+    "order_statistic_index_one_based",
+    "minimum_required_sample_count",
+    "quantile",
+    "quantile_decimal",
+    "quantile_hex",
+    "score_definition",
+    "estimator_formula_version",
+    "estimator_variant",
+    "clipping_policy",
+    "numeric_precision",
+    "kappa_min",
+    "eligibility_kappa",
+    "fallback_policy",
+    "input_sha256",
+    "query_split_manifest_sha256",
+    "phase1_run_manifest_sha256",
+    "phase1_summary_sha256",
+    "calibration_scores_sha256",
+    "calibration_query_ids",
+    "test_queries_read"
+  ],
+  "properties": {
+    "format": { "const": "v0_ratio_probabilistic_calibrator" },
+    "format_version": { "const": 1 },
+    "phase2_version": { "type": "string", "minLength": 1 },
+    "calibrator_id": { "type": "string", "pattern": "^(record|query)_alpha_1e-[1-5]$" },
+    "status": { "enum": ["supported", "unsupported_sample_size"] },
+    "calibration_level": { "enum": ["record", "query"] },
+    "nominal_alpha": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+    "sample_count": { "type": "integer", "minimum": 0 },
+    "order_statistic_index_one_based": { "type": "integer", "minimum": 1 },
+    "minimum_required_sample_count": { "type": "integer", "minimum": 1 },
+    "quantile": { "type": ["number", "null"] },
+    "quantile_decimal": { "type": ["string", "null"] },
+    "quantile_hex": { "type": ["string", "null"] },
+    "score_definition": { "type": "string", "minLength": 1 },
+    "estimator_formula_version": { "type": "string", "minLength": 1 },
+    "estimator_variant": { "const": "ratio_meta" },
+    "clipping_policy": { "const": "clipped" },
+    "numeric_precision": { "const": "float64" },
+    "kappa_min": { "type": "number", "exclusiveMinimum": 0 },
+    "eligibility_kappa": { "const": "kappa_meta" },
+    "fallback_policy": { "const": "probabilistic_estimator_unavailable_use_current_lb" },
+    "input_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "query_split_manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "phase1_run_manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "phase1_summary_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "calibration_scores_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "calibration_query_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "test_queries_read": { "const": false }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "supported" } } },
+      "then": {
+        "properties": {
+          "quantile": { "type": "number" },
+          "quantile_decimal": { "type": "string" },
+          "quantile_hex": { "type": "string" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "unsupported_sample_size" } } },
+      "then": {
+        "properties": {
+          "quantile": { "type": "null" },
+          "quantile_decimal": { "type": "null" },
+          "quantile_hex": { "type": "null" }
+        }
+      }
+    }
+  ]
+}

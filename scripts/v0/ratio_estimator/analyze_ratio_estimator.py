@@ -33,6 +33,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+import ratio_estimator_core as estimator_core
+
 
 ANALYZER_VERSION = "v0_ratio_estimator_phase1_v1"
 SPLIT_MANIFEST_VERSION = 1
@@ -250,84 +252,7 @@ def append_reason(reason: pd.Series, mask: pd.Series | np.ndarray, label: str) -
 
 
 def derive_estimators(frame: pd.DataFrame, config: AnalysisConfig) -> pd.DataFrame:
-    result, conversion_failure = numeric_frame(frame)
-    reason = pd.Series("", index=result.index, dtype="string")
-    append_reason(reason, ~result["diagnostic_valid"], "diagnostic_valid_false")
-    append_reason(reason, conversion_failure, "non_finite_or_non_numeric_input")
-    append_reason(reason, result["x_norm"] <= 0.0, "non_positive_x_norm")
-    append_reason(reason, result["reconstruction_norm"] <= 0.0, "non_positive_reconstruction_norm")
-
-    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        n = result["x_norm"]
-        ell = result["edge_length"]
-        s = result["reconstruction_norm"]
-        x_dot_r = result["x_dot_r"]
-        x_dot_u = result["x_dot_true_direction"]
-        e_actual = result["actual_direction_error"]
-        e_meta = result["direction_error"]
-
-        result["rho_true"] = x_dot_u / n
-        result["rho_hat_raw_unclipped"] = x_dot_r / (n * s)
-        result["kappa_actual"] = (1.0 + s * s - e_actual * e_actual) / (2.0 * s)
-        result["kappa_meta"] = (1.0 + s * s - e_meta * e_meta) / (2.0 * s)
-        result["rho_hat_ratio_unclipped"] = result["rho_hat_raw_unclipped"] / result["kappa_actual"]
-        result["rho_hat_ratio_meta_unclipped"] = result["rho_hat_raw_unclipped"] / result["kappa_meta"]
-
-        for prefix in ("raw", "ratio", "ratio_meta"):
-            source = f"rho_hat_{prefix}_unclipped"
-            result[f"rho_hat_{prefix}_clipped"] = result[source].clip(-1.0, 1.0)
-
-        result["distance_reconstructed"] = n * n + ell * ell - 2.0 * ell * x_dot_u
-        for prefix in ("raw", "ratio", "ratio_meta"):
-            for clipping in ("unclipped", "clipped"):
-                rho_name = f"rho_hat_{prefix}_{clipping}"
-                result[f"distance_hat_{prefix}_{clipping}"] = n * n + ell * ell - 2.0 * n * ell * result[rho_name]
-
-    result["closure_abs_error"] = (
-        result["distance_reconstructed"] - result["shadow_exact_squared_distance"]
-    ).abs()
-    result["closure_tolerance"] = (
-        config.closure_absolute_tolerance
-        + config.closure_relative_tolerance
-        * np.maximum(
-            result["distance_reconstructed"].abs(),
-            result["shadow_exact_squared_distance"].abs(),
-        )
-    )
-    result["distance_closure_valid"] = result["closure_abs_error"] <= result["closure_tolerance"]
-    result["projection_closure_valid"] = result["rho_true"].abs() <= (1.0 + config.projection_tolerance)
-    append_reason(reason, result["kappa_actual"] <= 0.0, "non_positive_kappa_actual")
-    append_reason(reason, ~np.isfinite(result["kappa_actual"]), "non_finite_kappa_actual")
-    append_reason(reason, ~result["distance_closure_valid"], "exact_distance_closure_failure")
-    append_reason(reason, ~result["projection_closure_valid"], "true_projection_outside_unit_interval")
-
-    derived_columns = [
-        name for name in result.columns
-        if name.startswith(("rho_", "kappa_", "distance_hat_", "distance_reconstructed"))
-    ]
-    derived_finite = np.isfinite(result[derived_columns].to_numpy(dtype=float)).all(axis=1)
-    append_reason(reason, ~derived_finite, "non_finite_derived_value")
-
-    result["invalid_reason"] = reason
-    result["analysis_valid"] = reason.eq("")
-    result["oracle_margin"] = result["shadow_exact_squared_distance"] - result["threshold"]
-    result["relative_abs_margin"] = result["oracle_margin"].abs() / np.maximum(
-        result["threshold"].abs(), 1e-12
-    )
-    result["kappa_meta_abs_error"] = (result["kappa_actual"] - result["kappa_meta"]).abs()
-
-    for prefix in ("raw", "ratio", "ratio_meta"):
-        for clipping in ("unclipped", "clipped"):
-            rho_hat = result[f"rho_hat_{prefix}_{clipping}"]
-            distance_hat = result[f"distance_hat_{prefix}_{clipping}"]
-            result[f"rho_error_{prefix}_{clipping}"] = rho_hat - result["rho_true"]
-            result[f"distance_error_{prefix}_{clipping}"] = (
-                distance_hat - result["shadow_exact_squared_distance"]
-            )
-    result["raw_rho_out_of_range"] = result["rho_hat_raw_unclipped"].abs() > 1.0
-    result["ratio_rho_out_of_range"] = result["rho_hat_ratio_unclipped"].abs() > 1.0
-    result["ratio_meta_rho_out_of_range"] = result["rho_hat_ratio_meta_unclipped"].abs() > 1.0
-    return result
+    return estimator_core.derive_estimators(frame, config)
 
 
 def choose_kappa_min(data: pd.DataFrame, candidates: Sequence[float], minimum_fraction: float) -> tuple[float, pd.DataFrame]:
@@ -691,6 +616,7 @@ def analyze(input_path: Path, output_dir: Path, config: AnalysisConfig) -> dict[
         "input_path": str(input_path),
         "input_sha256": input_sha,
         "analyzer_version": ANALYZER_VERSION,
+        "estimator_formula_version": estimator_core.ESTIMATOR_FORMULA_VERSION,
         "query_count": int(data["query_id"].nunique()),
         "query_ids": split,
     }
@@ -728,6 +654,7 @@ def analyze(input_path: Path, output_dir: Path, config: AnalysisConfig) -> dict[
         "format": "v0_ratio_estimator_phase1_summary",
         "format_version": 1,
         "analyzer_version": ANALYZER_VERSION,
+        "estimator_formula_version": estimator_core.ESTIMATOR_FORMULA_VERSION,
         "status": status,
         "mode": config.mode,
         "decision": decision,
@@ -767,6 +694,7 @@ def analyze(input_path: Path, output_dir: Path, config: AnalysisConfig) -> dict[
         "format": "v0_ratio_estimator_phase1_run_manifest",
         "format_version": 1,
         "analyzer_version": ANALYZER_VERSION,
+        "estimator_formula_version": estimator_core.ESTIMATOR_FORMULA_VERSION,
         "analyzer_path": str(Path(__file__).resolve()),
         "analyzer_sha256": sha256_file(Path(__file__).resolve()),
         "input_path": str(input_path),

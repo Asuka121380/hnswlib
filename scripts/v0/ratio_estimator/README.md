@@ -120,3 +120,44 @@ sbatch scripts/v0/ratio_estimator/run_ratio_estimator_diagnostic.slurm
 Optional variables are `PYTHON_BIN`, `ANALYSIS_MODE`, and
 `KAPPA_MIN_CANDIDATES`.  The job runs the synthetic tests before analysis and
 writes SHA-256 values for the principal artifacts.
+
+## Phase 2 empirical bound calibration
+
+Phase 2 consumes the exact input CSV and the frozen Phase-1 directory. It
+builds independent record-level and query-level split-conformal calibrators
+from calibration queries, freezes their hashes, and only then applies them to
+the held-out test queries:
+
+```bash
+python scripts/v0/ratio_estimator/calibrate_probabilistic_bound.py \
+  --input /path/to/cap_diagnostic_input.csv \
+  --phase1-dir /path/to/RUN_ID/phase1 \
+  --output-dir /path/to/RUN_ID/phase2
+
+python scripts/v0/ratio_estimator/apply_probabilistic_bound.py \
+  --input /path/to/cap_diagnostic_input.csv \
+  --phase1-dir /path/to/RUN_ID/phase1 \
+  --calibration-dir /path/to/RUN_ID/phase2 \
+  --output-dir /path/to/RUN_ID/phase2
+```
+
+The default risks are `1e-1,1e-2,1e-3,1e-4,1e-5`. A work point whose
+finite-sample conformal index exceeds its calibration sample count is emitted
+as `unsupported_sample_size`; it is never silently replaced by the sample
+maximum. Records that fail the frozen `kappa_min` or validity gate use the
+existing lower bound and are counted explicitly.
+
+The application reports record/query violation rates with exact 95%
+Clopper-Pearson intervals, violation magnitudes, fallback usage, and a frozen
+`GO_TO_PHASE3` or `NO_GO_EMPIRICAL_BOUND` decision. These are held-out
+empirical guarantees for the sampled search distribution, not deterministic
+lower bounds under a changed HNSW control flow.
+
+For SLURM, set `REPO_ROOT`, `INPUT_CSV`, `PHASE1_DIR`, and `OUTPUT_DIR`, then:
+
+```bash
+sbatch scripts/v0/ratio_estimator/run_phase2_calibration.slurm
+```
+
+The job runs both synthetic test suites before calibration and writes a
+SHA-256 inventory for all Phase-2 artifacts.
