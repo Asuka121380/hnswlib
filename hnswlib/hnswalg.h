@@ -11,6 +11,9 @@
 #include <memory>
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
 #include "baseline_trace.h"
+#endif
+#if defined(HNSWLIB_ENABLE_BASELINE_TRACE) || \
+    defined(HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR)
 #include <chrono>
 #endif
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
@@ -19,6 +22,10 @@
 #include "edge_quant_v0_metadata.h"
 #include "edge_quant_v0_metrics.h"
 #include "edge_quant_v0_query_metadata.h"
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+#include "edge_quant_v0_probabilistic_bound.h"
+#include "edge_quant_v0_ratio_estimator.h"
+#endif
 #ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
 #include "edge_quant_v0_cap_diagnostic.h"
 #endif
@@ -87,6 +94,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
     std::shared_ptr<const EdgeQuantV0Metadata> edge_quant_v0_metadata_;
     std::atomic<bool> edge_quant_v0_metadata_stale_{false};
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+    std::shared_ptr<const V0RatioCodebookNormLut>
+        edge_quant_v0_ratio_norm_lut_;
+#endif
 #endif
 
 
@@ -346,12 +357,22 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 getV0Layer0GraphView(),
                 static_cast<uint32_t>(dimension_size),
                 getV0SerializedIndexFingerprint());
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+        const std::shared_ptr<const V0RatioCodebookNormLut> ratio_norm_lut(
+            new V0RatioCodebookNormLut(loaded->view()));
+#endif
         edge_quant_v0_metadata_ = loaded;
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+        edge_quant_v0_ratio_norm_lut_ = ratio_norm_lut;
+#endif
         edge_quant_v0_metadata_stale_.store(
             false, std::memory_order_release);
     }
 
     void clearEdgeQuantV0Metadata() {
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+        edge_quant_v0_ratio_norm_lut_.reset();
+#endif
         edge_quant_v0_metadata_.reset();
         edge_quant_v0_metadata_stale_.store(
             false, std::memory_order_release);
@@ -371,6 +392,17 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         requireUsableEdgeQuantV0Metadata();
         return *edge_quant_v0_metadata_;
     }
+
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+    const V0RatioCodebookNormLut& getV0RatioCodebookNormLut() const {
+        requireUsableEdgeQuantV0Metadata();
+        if (!edge_quant_v0_ratio_norm_lut_) {
+            throw std::runtime_error(
+                "V0 ratio codebook norm LUT is not loaded");
+        }
+        return *edge_quant_v0_ratio_norm_lut_;
+    }
+#endif
 
     V0EdgeRecordView getEdgeQuantV0Record(
         tableint source_id,
@@ -509,6 +541,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         , V0ShadowValidationCollector* v0_shadow = nullptr
         , uint64_t v0_query_id = 0U
 #endif
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+        , const V0RatioEstimatorQueryContext* v0_ratio_query = nullptr
+        , const V0RatioCalibrator* v0_ratio_calibrator = nullptr
+        , V0RatioQueryMetrics* v0_ratio_metrics = nullptr
+        , bool v0_ratio_enable_real_pruning = false
+        , uint64_t v0_ratio_query_id = 0U
+#ifdef HNSWLIB_ENABLE_V0_RATIO_SHADOW
+        , V0RatioShadowCollector* v0_ratio_shadow = nullptr
+#endif
+#endif
 #endif
         ) const {
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
@@ -517,6 +559,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             throw std::invalid_argument(
                 "V0 search requires query context and metrics");
         }
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+        const bool v0_ratio_active =
+            use_edge_quant_v0 && v0_ratio_calibrator != nullptr;
+        if (v0_ratio_active &&
+            (v0_ratio_query == nullptr || v0_ratio_metrics == nullptr ||
+             !v0_ratio_calibrator->validated())) {
+            throw std::invalid_argument(
+                "V0 ratio search requires validated configuration, query context, and metrics");
+        }
+#endif
 #endif
         VisitedList *vl = visited_list_pool_->getFreeVisitedList();
         vl_type *visited_array = vl->mass;
@@ -568,6 +620,12 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             }
             candidate_set.pop();
 
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+            if (v0_ratio_active) {
+                ++v0_ratio_metrics->candidate_expansions;
+            }
+#endif
+
             tableint current_node_id = current_node_pair.second;
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
             uint64_t trace_expansion_index = 0;
@@ -605,6 +663,12 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
                 if (!(visited_array[candidate_id] == visited_array_tag)) {
                     visited_array[candidate_id] = visited_array_tag;
+
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+                    if (v0_ratio_active) {
+                        ++v0_ratio_metrics->visited_nodes;
+                    }
+#endif
 
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
                     V0BoundResult v0_bound;
@@ -647,6 +711,63 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     }
 #endif
 
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+                    V0RatioBoundResult v0_ratio_bound;
+                    bool v0_ratio_bound_attempted = false;
+                    bool v0_ratio_would_prune = false;
+                    if (v0_ratio_active) {
+                        if (top_candidates.size() < ef) {
+                            ++v0_ratio_metrics->ratio_exact_fallback;
+                        } else {
+                            v0_ratio_bound_attempted = true;
+                            ++v0_ratio_metrics->ratio_bound_evaluated;
+                            const std::chrono::steady_clock::time_point
+                                ratio_start =
+                                    std::chrono::steady_clock::now();
+                            const V0RatioEstimate estimate =
+                                v0_ratio_query->evaluate(
+                                    getEdgeQuantV0Record(
+                                        current_node_id, j - 1U),
+                                    static_cast<double>(candidate_dist),
+                                    v0_ratio_calibrator->kappaMin());
+                            v0_ratio_bound = evaluateV0RatioBound(
+                                estimate,
+                                *v0_ratio_calibrator,
+                                v0_bound);
+                            const std::chrono::steady_clock::time_point
+                                ratio_end =
+                                    std::chrono::steady_clock::now();
+                            v0_ratio_metrics->estimator_time_ns +=
+                                static_cast<uint64_t>(
+                                    std::chrono::duration_cast<
+                                        std::chrono::nanoseconds>(
+                                            ratio_end - ratio_start).count());
+                            if (v0_ratio_bound.ratio_eligible) {
+                                ++v0_ratio_metrics->ratio_eligible;
+                            } else {
+                                ++v0_ratio_metrics->ratio_invalid_fallback;
+                            }
+                            if (v0_ratio_bound.current_lb_fallback) {
+                                ++v0_ratio_metrics->
+                                    ratio_current_lb_fallback;
+                            }
+                            if (!v0_ratio_bound.effective_bound_valid) {
+                                ++v0_ratio_metrics->ratio_exact_fallback;
+                            }
+                            v0_ratio_would_prune =
+                                v0_ratio_bound.provesFartherThan(
+                                    static_cast<double>(lowerBound));
+                            if (v0_ratio_would_prune) {
+                                ++v0_ratio_metrics->ratio_bound_pruned;
+                                if (v0_ratio_bound.current_lb_fallback) {
+                                    ++v0_ratio_metrics->
+                                        ratio_current_lb_fallback_pruned;
+                                }
+                            }
+                        }
+                    }
+#endif
+
 #if defined(HNSWLIB_ENABLE_EDGE_QUANT_V0) && \
     defined(HNSWLIB_ENABLE_V0_REAL_PRUNING)
                     if (use_edge_quant_v0 &&
@@ -654,6 +775,17 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         v0_bound_attempted &&
                         v0_would_prune) {
                         ++v0_metrics->exact_distance_saved;
+                        continue;
+                    }
+#endif
+
+#if defined(HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR) && \
+    defined(HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING)
+                    if (v0_ratio_active &&
+                        v0_ratio_enable_real_pruning &&
+                        v0_ratio_bound_attempted &&
+                        v0_ratio_would_prune) {
+                        ++v0_ratio_metrics->exact_distance_saved;
                         continue;
                     }
 #endif
@@ -683,12 +815,34 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
 
                     char *currObj1 = (getDataByInternalId(candidate_id));
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+                    std::chrono::steady_clock::time_point
+                        v0_ratio_exact_start;
+                    if (v0_ratio_active) {
+                        v0_ratio_exact_start =
+                            std::chrono::steady_clock::now();
+                    }
+#endif
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
                     dist_t dist = trace != nullptr ? traceDistance(data_point, currObj1, trace) :
                         fstdistfunc_(data_point, currObj1, dist_func_param_);
                     if (trace != nullptr) trace_record.dist_qd = static_cast<double>(dist);
 #else
                     dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);
+#endif
+
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+                    if (v0_ratio_active) {
+                        const std::chrono::steady_clock::time_point
+                            v0_ratio_exact_end =
+                                std::chrono::steady_clock::now();
+                        v0_ratio_metrics->exact_distance_time_ns +=
+                            static_cast<uint64_t>(
+                                std::chrono::duration_cast<
+                                    std::chrono::nanoseconds>(
+                                        v0_ratio_exact_end -
+                                        v0_ratio_exact_start).count());
+                    }
 #endif
 
 #if defined(HNSWLIB_ENABLE_EDGE_QUANT_V0) && \
@@ -822,7 +976,97 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                                 }
                             }
 #endif
+
+
                             v0_shadow->append(record);
+                        }
+                    }
+#endif
+
+#if defined(HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR) && \
+    defined(HNSWLIB_ENABLE_V0_RATIO_SHADOW)
+                    if (v0_ratio_active && v0_ratio_bound_attempted) {
+                        const double exact_squared_distance =
+                            static_cast<double>(dist);
+                        const bool oracle_would_prune =
+                            exact_squared_distance >
+                                static_cast<double>(lowerBound);
+                        const bool interval_violation =
+                            v0_ratio_bound.ratio_eligible &&
+                            v0_ratio_bound.ratio_lower_bound >
+                                exact_squared_distance;
+                        const bool false_prune =
+                            v0_ratio_would_prune &&
+                            exact_squared_distance <=
+                                static_cast<double>(lowerBound);
+                        if (oracle_would_prune) {
+                            ++v0_ratio_metrics->oracle_prunable;
+                        }
+                        if (interval_violation) {
+                            ++v0_ratio_metrics->ratio_interval_violation;
+                        }
+                        if (false_prune) {
+                            ++v0_ratio_metrics->ratio_false_prune;
+                        }
+                        if (v0_ratio_shadow != nullptr) {
+                            V0RatioShadowRecord record;
+                            record.query_id = v0_ratio_query_id;
+                            record.current_node_id =
+                                static_cast<uint64_t>(current_node_id);
+                            record.candidate_id =
+                                static_cast<uint64_t>(candidate_id);
+                            record.current_squared_distance =
+                                static_cast<double>(candidate_dist);
+                            record.threshold =
+                                static_cast<double>(lowerBound);
+                            record.current_lb = v0_bound.lower_bound;
+                            record.current_lb_valid = v0_bound.valid();
+                            record.current_would_prune =
+                                v0_bound.provesFartherThan(
+                                    static_cast<double>(lowerBound));
+                            record.edge_length =
+                                v0_ratio_bound.estimate.edge_length;
+                            record.direction_error =
+                                v0_ratio_bound.estimate.direction_error;
+                            record.reconstruction_norm =
+                                v0_ratio_bound.estimate.reconstruction_norm;
+                            record.x_dot_reconstruction =
+                                v0_ratio_bound.estimate.x_dot_reconstruction;
+                            record.kappa_meta =
+                                v0_ratio_bound.estimate.kappa_meta;
+                            record.ratio_eligible =
+                                v0_ratio_bound.ratio_eligible;
+                            record.ratio_fallback_reason =
+                                v0RatioFallbackReason(
+                                    v0_ratio_bound.estimate.status);
+                            record.rho_hat_raw =
+                                v0_ratio_bound.estimate.rho_hat_raw;
+                            record.rho_hat_ratio =
+                                v0_ratio_bound.estimate.
+                                    rho_hat_ratio_clipped;
+                            record.ratio_estimated_squared_distance =
+                                v0_ratio_bound.estimate.
+                                    estimated_squared_distance;
+                            record.ratio_quantile =
+                                v0_ratio_bound.quantile;
+                            record.ratio_lb =
+                                v0_ratio_bound.ratio_lower_bound;
+                            record.ratio_effective_lb =
+                                v0_ratio_bound.effective_lower_bound;
+                            record.ratio_used_current_fallback =
+                                v0_ratio_bound.current_lb_fallback;
+                            record.ratio_would_prune =
+                                v0_ratio_would_prune;
+                            record.exact_squared_distance =
+                                exact_squared_distance;
+                            record.oracle_would_prune =
+                                oracle_would_prune;
+                            record.ratio_interval_violation =
+                                interval_violation;
+                            record.ratio_false_prune = false_prune;
+                            record.calibrator_id =
+                                v0_ratio_calibrator->operatingPointId();
+                            v0_ratio_shadow->append(record);
                         }
                     }
 #endif
@@ -1774,6 +2018,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         , V0ShadowValidationCollector* v0_shadow = nullptr
         , uint64_t v0_query_id = 0U
 #endif
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+        , const V0RatioEstimatorQueryContext* v0_ratio_query = nullptr
+        , const V0RatioCalibrator* v0_ratio_calibrator = nullptr
+        , V0RatioQueryMetrics* v0_ratio_metrics = nullptr
+        , bool v0_ratio_enable_real_pruning = false
+        , uint64_t v0_ratio_query_id = 0U
+#ifdef HNSWLIB_ENABLE_V0_RATIO_SHADOW
+        , V0RatioShadowCollector* v0_ratio_shadow = nullptr
+#endif
+#endif
 #endif
         ) const {
         std::priority_queue<std::pair<dist_t, labeltype >> result;
@@ -1848,6 +2102,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
 #endif
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+                    , v0_ratio_query, v0_ratio_calibrator,
+                    v0_ratio_metrics, v0_ratio_enable_real_pruning,
+                    v0_ratio_query_id
+#ifdef HNSWLIB_ENABLE_V0_RATIO_SHADOW
+                    , v0_ratio_shadow
+#endif
+#endif
 #endif
                     );
 #else
@@ -1857,6 +2119,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     , nullptr, v0_query, v0_metrics, v0_enable_real_pruning
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
+#endif
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+                    , v0_ratio_query, v0_ratio_calibrator,
+                    v0_ratio_metrics, v0_ratio_enable_real_pruning,
+                    v0_ratio_query_id
+#ifdef HNSWLIB_ENABLE_V0_RATIO_SHADOW
+                    , v0_ratio_shadow
+#endif
 #endif
 #endif
                     );
@@ -1870,6 +2140,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
 #endif
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+                    , v0_ratio_query, v0_ratio_calibrator,
+                    v0_ratio_metrics, v0_ratio_enable_real_pruning,
+                    v0_ratio_query_id
+#ifdef HNSWLIB_ENABLE_V0_RATIO_SHADOW
+                    , v0_ratio_shadow
+#endif
+#endif
 #endif
                     );
 #else
@@ -1879,6 +2157,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     , nullptr, v0_query, v0_metrics, v0_enable_real_pruning
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
+#endif
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+                    , v0_ratio_query, v0_ratio_calibrator,
+                    v0_ratio_metrics, v0_ratio_enable_real_pruning,
+                    v0_ratio_query_id
+#ifdef HNSWLIB_ENABLE_V0_RATIO_SHADOW
+                    , v0_ratio_shadow
+#endif
 #endif
 #endif
                     );
@@ -2004,6 +2290,112 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             , nullptr
             , 0U
 #endif
+#endif
+        );
+    }
+#endif
+
+#if defined(HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR) && \
+    defined(HNSWLIB_ENABLE_V0_RATIO_SHADOW)
+    std::priority_queue<std::pair<dist_t, labeltype > >
+    searchKnnV0RatioShadow(
+        const void* query_data,
+        size_t k,
+        const V0RatioCalibrator& calibrator,
+        V0RatioQueryMetrics* metrics = nullptr,
+        BaseFilterFunctor* isIdAllowed = nullptr,
+        V0RatioShadowCollector* shadow = nullptr,
+        uint64_t query_id = 0U) const {
+        V0RatioQueryMetrics local_ratio_metrics;
+        V0RatioQueryMetrics* active_ratio_metrics =
+            metrics != nullptr ? metrics : &local_ratio_metrics;
+        active_ratio_metrics->reset();
+        requireUsableEdgeQuantV0Metadata();
+        if (!calibrator.validated()) {
+            throw std::invalid_argument(
+                "V0 ratio shadow requires a validated calibrator");
+        }
+        const EdgeQuantV0QueryContext current_context(
+            static_cast<const float*>(query_data),
+            getEdgeQuantV0Metadata().view());
+        const V0RatioEstimatorQueryContext ratio_context(
+            static_cast<const float*>(query_data),
+            getEdgeQuantV0Metadata().view(),
+            getV0RatioCodebookNormLut());
+        V0QueryMetrics current_metrics;
+        current_metrics.reset();
+        return searchKnnInternal<true>(
+            query_data,
+            k,
+            isIdAllowed
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+            , nullptr
+#endif
+            , &current_context
+            , &current_metrics
+            , false
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+            , nullptr
+            , query_id
+#endif
+            , &ratio_context
+            , &calibrator
+            , active_ratio_metrics
+            , false
+            , query_id
+            , shadow
+        );
+    }
+#endif
+
+#if defined(HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR) && \
+    defined(HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING)
+    std::priority_queue<std::pair<dist_t, labeltype > >
+    searchKnnV0RatioPruned(
+        const void* query_data,
+        size_t k,
+        const V0RatioCalibrator& calibrator,
+        V0RatioQueryMetrics* metrics = nullptr,
+        BaseFilterFunctor* isIdAllowed = nullptr) const {
+        V0RatioQueryMetrics local_ratio_metrics;
+        V0RatioQueryMetrics* active_ratio_metrics =
+            metrics != nullptr ? metrics : &local_ratio_metrics;
+        active_ratio_metrics->reset();
+        requireUsableEdgeQuantV0Metadata();
+        if (!calibrator.validated()) {
+            throw std::invalid_argument(
+                "V0 ratio real pruning requires a validated calibrator");
+        }
+        const EdgeQuantV0QueryContext current_context(
+            static_cast<const float*>(query_data),
+            getEdgeQuantV0Metadata().view());
+        const V0RatioEstimatorQueryContext ratio_context(
+            static_cast<const float*>(query_data),
+            getEdgeQuantV0Metadata().view(),
+            getV0RatioCodebookNormLut());
+        V0QueryMetrics current_metrics;
+        current_metrics.reset();
+        return searchKnnInternal<true>(
+            query_data,
+            k,
+            isIdAllowed
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+            , nullptr
+#endif
+            , &current_context
+            , &current_metrics
+            , false
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+            , nullptr
+            , 0U
+#endif
+            , &ratio_context
+            , &calibrator
+            , active_ratio_metrics
+            , true
+            , 0U
+#ifdef HNSWLIB_ENABLE_V0_RATIO_SHADOW
+            , nullptr
 #endif
         );
     }

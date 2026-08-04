@@ -203,3 +203,60 @@ sbatch scripts/v0/ratio_estimator/run_phase3_simulation.slurm
 Optional variables are `PYTHON_BIN`, `RAW_METADATA`, `QUERY_METRICS`, and
 `SENSITIVITY_KAPPA`. The job runs all three synthetic suites and hashes every
 Phase-3 artifact even when the valid scientific decision is No-Go (exit 3).
+
+## Phase 4 online HNSW shadow and real pruning
+
+Phase 4 moves the frozen ratio estimator and Phase-2 calibrator into the C++
+HNSW candidate loop. The sidecar format remains unchanged: a query-independent
+codeword-norm LUT is built when the validated V0 sidecar is loaded, and a
+query-specific dot-product LUT is built once per search.
+
+Three compile-time flags are default-off:
+
+```text
+HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+HNSWLIB_ENABLE_V0_RATIO_SHADOW
+HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING
+```
+
+Shadow and real-pruning builds must be separate. Shadow always computes the
+exact candidate distance and writes sampled schema-v1 ratio records; its
+`exact_distance_saved` counter must remain zero. Real pruning omits the exact
+distance only when the validated effective lower bound is strictly greater
+than the current threshold. Invalid estimator inputs fail closed to the
+existing current lower bound. A diagnostic-only operating point is rejected
+unless explicitly enabled for the aggressive sensitivity run.
+
+Build and test the two configurations independently, for example:
+
+```bash
+cmake -S . -B build-v0-ratio-shadow -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DHNSWLIB_ENABLE_EDGE_QUANT_V0=ON \
+  -DHNSWLIB_ENABLE_V0_RATIO_ESTIMATOR=ON \
+  -DHNSWLIB_ENABLE_V0_RATIO_SHADOW=ON
+cmake --build build-v0-ratio-shadow --parallel 8
+ctest --test-dir build-v0-ratio-shadow -R 'v0_ratio|v0_search_runner' --output-on-failure
+
+cmake -S . -B build-v0-ratio-real -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DHNSWLIB_ENABLE_EDGE_QUANT_V0=ON \
+  -DHNSWLIB_ENABLE_V0_RATIO_ESTIMATOR=ON \
+  -DHNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING=ON
+cmake --build build-v0-ratio-real --parallel 8
+ctest --test-dir build-v0-ratio-real -R 'v0_ratio|v0_search_runner' --output-on-failure
+```
+
+Submit `run_ratio_shadow.slurm` first. It performs an independent Python
+recomputation of every sampled C++ quantity and decision. Then submit small
+q1/q10 real-pruning jobs before the formal sweep. The formal sweep uses fresh
+queries, `efSearch={100,200,400}`, five repetitions, and the conservative,
+balanced, and explicitly-labelled aggressive operating points. The aggressive
+point requires `ALLOW_DIAGNOSTIC=true` and cannot independently authorize a Go.
+Each recorded run performs ten untimed in-process warmup queries by default;
+set `REPETITION=0..4` explicitly so the formal matrix is auditable.
+
+`run_phase4_comparison.slurm` aggregates only complete, provenance-compatible
+runs. Formal mode requires a fresh-query manifest containing disjoint
+`query_ids` and `phase3_query_ids`. It emits per-run/per-configuration tables,
+per-query risk, figures, a Markdown report, and `decision.json`. A trusted
+configuration passes only when Recall@K loss is at most 0.1 percentage points
+and either exact-distance savings or QPS improvement is at least 5%.

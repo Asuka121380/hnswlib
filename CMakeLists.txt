@@ -18,6 +18,9 @@ option(HNSWLIB_ENABLE_EDGE_QUANT_V0 "Enable V0 conservative edge-quantised pruni
 option(HNSWLIB_ENABLE_V0_SHADOW_VALIDATION "Enable exact shadow validation for V0 pruning decisions." OFF)
 option(HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC "Enable Phase-1 sampled spherical-cap geometry export." OFF)
 option(HNSWLIB_ENABLE_V0_REAL_PRUNING "Enable opt-in V0 pruning that skips proven-far exact distances." OFF)
+option(HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR "Enable the Phase-4 ratio-corrected PQ estimator." OFF)
+option(HNSWLIB_ENABLE_V0_RATIO_SHADOW "Enable observe-only Phase-4 ratio shadow diagnostics." OFF)
+option(HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING "Enable Phase-4 ratio pruning in HNSW control flow." OFF)
 option(HNSWLIB_BUILD_FAISS_PQ_TOOLS "Build Faiss-based offline V0 PQ tools." OFF)
 set(FAISS_INCLUDE_DIR "" CACHE PATH "Faiss source/install root containing faiss/impl/ProductQuantizer.h")
 set(FAISS_LIBRARY "" CACHE FILEPATH "Path to the Faiss CPU shared/static library")
@@ -30,6 +33,37 @@ endif()
 if(HNSWLIB_ENABLE_V0_REAL_PRUNING AND NOT HNSWLIB_ENABLE_EDGE_QUANT_V0)
     message(FATAL_ERROR
         "HNSWLIB_ENABLE_V0_REAL_PRUNING requires HNSWLIB_ENABLE_EDGE_QUANT_V0=ON")
+endif()
+
+if(HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR AND NOT HNSWLIB_ENABLE_EDGE_QUANT_V0)
+    message(FATAL_ERROR
+        "HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR requires HNSWLIB_ENABLE_EDGE_QUANT_V0=ON")
+endif()
+
+if(HNSWLIB_ENABLE_V0_RATIO_SHADOW AND NOT HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR)
+    message(FATAL_ERROR
+        "HNSWLIB_ENABLE_V0_RATIO_SHADOW requires HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR=ON")
+endif()
+
+if(HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING AND NOT HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR)
+    message(FATAL_ERROR
+        "HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING requires HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR=ON")
+endif()
+
+if(HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING AND HNSWLIB_ENABLE_V0_RATIO_SHADOW)
+    message(FATAL_ERROR
+        "Ratio real-pruning and ratio shadow must use separate builds")
+endif()
+
+if(HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING AND HNSWLIB_ENABLE_V0_SHADOW_VALIDATION)
+    message(FATAL_ERROR
+        "Ratio real-pruning performance builds must disable legacy shadow validation")
+endif()
+
+if((HNSWLIB_ENABLE_V0_RATIO_SHADOW OR HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING)
+   AND HNSWLIB_ENABLE_V0_REAL_PRUNING)
+    message(FATAL_ERROR
+        "Phase-4 ratio shadow/real builds must disable legacy V0 real pruning")
 endif()
 
 if(HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC AND NOT HNSWLIB_ENABLE_V0_SHADOW_VALIDATION)
@@ -73,6 +107,18 @@ endif()
 
 if(HNSWLIB_ENABLE_V0_REAL_PRUNING)
     target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_V0_REAL_PRUNING=1)
+endif()
+
+if(HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR)
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR=1)
+endif()
+
+if(HNSWLIB_ENABLE_V0_RATIO_SHADOW)
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_V0_RATIO_SHADOW=1)
+endif()
+
+if(HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING)
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING=1)
 endif()
 
 target_include_directories(hnswlib INTERFACE
@@ -200,6 +246,9 @@ if(HNSWLIB_EXAMPLES)
 
       add_executable(v0_search_runner examples/cpp/v0_search_runner.cpp)
       target_link_libraries(v0_search_runner hnswlib)
+      target_compile_definitions(v0_search_runner PRIVATE
+        HNSWLIB_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
+        HNSWLIB_CXX_COMPILER_ID="${CMAKE_CXX_COMPILER_ID}")
       add_test(NAME v0_search_runner_cli_test COMMAND v0_search_runner --help)
 
       add_executable(v0_feature_isolation_test tests/cpp/v0_feature_isolation_test.cpp)
@@ -245,6 +294,24 @@ if(HNSWLIB_EXAMPLES)
       add_executable(v0_bound_evaluator_test tests/cpp/v0_bound_evaluator_test.cpp)
       target_link_libraries(v0_bound_evaluator_test hnswlib)
       add_test(NAME v0_bound_evaluator_test COMMAND v0_bound_evaluator_test)
+
+      if(HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR)
+        add_executable(v0_ratio_estimator_test tests/cpp/v0_ratio_estimator_test.cpp)
+        target_link_libraries(v0_ratio_estimator_test hnswlib)
+        add_test(NAME v0_ratio_estimator_test COMMAND v0_ratio_estimator_test)
+      endif()
+
+      if(HNSWLIB_ENABLE_V0_RATIO_SHADOW)
+        add_executable(v0_ratio_shadow_validation_test tests/cpp/v0_ratio_shadow_validation_test.cpp)
+        target_link_libraries(v0_ratio_shadow_validation_test hnswlib)
+        add_test(NAME v0_ratio_shadow_validation_test COMMAND v0_ratio_shadow_validation_test)
+      endif()
+
+      if(HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING)
+        add_executable(v0_ratio_real_pruning_test tests/cpp/v0_ratio_real_pruning_test.cpp)
+        target_link_libraries(v0_ratio_real_pruning_test hnswlib)
+        add_test(NAME v0_ratio_real_pruning_test COMMAND v0_ratio_real_pruning_test)
+      endif()
 
       if(HNSWLIB_ENABLE_V0_SHADOW_VALIDATION)
         add_executable(v0_shadow_validation_test tests/cpp/v0_shadow_validation_test.cpp)

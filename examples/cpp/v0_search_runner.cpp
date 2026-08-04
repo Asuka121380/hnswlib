@@ -20,11 +20,19 @@
 #ifdef _WIN32
 #include <direct.h>
 #else
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #endif
 
 #include "hnswlib/hnswlib.h"
+
+#ifndef HNSWLIB_BUILD_TYPE
+#define HNSWLIB_BUILD_TYPE "unknown"
+#endif
+#ifndef HNSWLIB_CXX_COMPILER_ID
+#define HNSWLIB_CXX_COMPILER_ID "unknown"
+#endif
 
 namespace {
 
@@ -51,8 +59,14 @@ struct Options {
     std::string producer_git_commit;
     std::string git_branch;
     std::string working_tree_dirty;
+    std::string ratio_selected_path;
+    std::string ratio_calibrator_path;
+    std::string ratio_operating_point_id;
+    bool allow_diagnostic_operating_point = false;
     size_t query_start = 0;
     size_t query_count = 0;
+    size_t warmup_query_count = 0;
+    size_t repetition = 0;
     size_t k = 10;
     size_t ef_search = 200;
     size_t shadow_sample_modulus = 1024;
@@ -75,6 +89,27 @@ struct Totals {
     uint64_t false_prune = 0;
     uint64_t shadow_records_seen = 0;
     uint64_t shadow_records_written = 0;
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+    uint64_t ratio_bound_evaluated = 0;
+    uint64_t ratio_eligible = 0;
+    uint64_t ratio_bound_pruned = 0;
+    uint64_t ratio_current_lb_fallback = 0;
+    uint64_t ratio_current_lb_fallback_pruned = 0;
+    uint64_t ratio_exact_fallback = 0;
+    uint64_t ratio_invalid_fallback = 0;
+    uint64_t ratio_exact_distance_saved = 0;
+    uint64_t ratio_oracle_prunable = 0;
+    uint64_t ratio_interval_violation = 0;
+    uint64_t ratio_false_prune = 0;
+    uint64_t ratio_shadow_records_seen = 0;
+    uint64_t ratio_shadow_records_written = 0;
+    uint64_t ratio_false_prune_query_exposure = 0;
+    uint64_t visited_nodes = 0;
+    uint64_t candidate_expansions = 0;
+    uint64_t estimator_time_ns = 0;
+    uint64_t exact_distance_time_ns = 0;
+    uint64_t lost_ground_truth_neighbors = 0;
+#endif
 #ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
     uint64_t cap_records_selected = 0;
     uint64_t cap_records_valid = 0;
@@ -83,6 +118,9 @@ struct Totals {
 #endif
     double baseline_recall_sum = 0.0;
     double v0_recall_sum = 0.0;
+    double baseline_recall_at_1_sum = 0.0;
+    double v0_recall_at_1_sum = 0.0;
+    double worst_v0_recall_at_k = 1.0;
 };
 
 uint64_t mix64(uint64_t value) {
@@ -136,6 +174,16 @@ std::string csvEscape(const std::string& value) {
     }
     escaped.push_back('"');
     return escaped;
+}
+
+uint64_t peakRssBytes() {
+#ifdef _WIN32
+    return 0U;
+#else
+    struct rusage usage;
+    if (getrusage(RUSAGE_SELF, &usage) != 0) return 0U;
+    return static_cast<uint64_t>(usage.ru_maxrss) * 1024U;
+#endif
 }
 
 std::string readText(const std::string& path) {
@@ -234,6 +282,14 @@ size_t parseSize(const char* value, const std::string& name) {
     }
 }
 
+bool parseBool(const char* value, const std::string& name) {
+    const std::string text(value);
+    if (text == "true" || text == "1") return true;
+    if (text == "false" || text == "0") return false;
+    throw std::runtime_error(
+        "Invalid boolean value for " + name + ": " + text);
+}
+
 void printUsage(std::ostream& out) {
     out
         << "Usage: v0_search_runner\n"
@@ -241,10 +297,16 @@ void printUsage(std::ostream& out) {
         << "  --index-path <hnsw-index>\n"
         << "  --sidecar-path <v0meta>\n"
         << "  --output-dir <directory>\n"
-        << "  --mode <correctness|shadow|prune>\n"
+        << "  --mode <correctness|shadow|prune|ratio-shadow|ratio-prune>\n"
+        << "  [--ratio-selected-path <selected_operating_points.json>]\n"
+        << "  [--ratio-calibrator-path <calibrator.json>]\n"
+        << "  [--ratio-operating-point-id <id>]\n"
+        << "  [--allow-diagnostic-operating-point <true|false>]\n"
         << "  [--run-id <text>]\n"
         << "  [--query-start <non-negative-integer>]\n"
         << "  [--query-count <non-negative-integer; 0 means remaining>]\n"
+        << "  [--warmup-query-count <non-negative-integer>]\n"
+        << "  [--repetition <non-negative-integer>]\n"
         << "  [--k <positive-integer>]\n"
         << "  [--ef-search <positive-integer>]\n"
         << "  [--shadow-sample-modulus <positive-integer>]\n"
@@ -276,6 +338,10 @@ Options parseOptions(int argc, char** argv) {
             options.query_start = parseSize(value, key);
         } else if (key == "--query-count") {
             options.query_count = parseSize(value, key);
+        } else if (key == "--warmup-query-count") {
+            options.warmup_query_count = parseSize(value, key);
+        } else if (key == "--repetition") {
+            options.repetition = parseSize(value, key);
         } else if (key == "--k") {
             options.k = parseSize(value, key);
         } else if (key == "--ef-search") {
@@ -290,6 +356,15 @@ Options parseOptions(int argc, char** argv) {
             options.git_branch = value;
         } else if (key == "--working-tree-dirty") {
             options.working_tree_dirty = value;
+        } else if (key == "--ratio-selected-path") {
+            options.ratio_selected_path = value;
+        } else if (key == "--ratio-calibrator-path") {
+            options.ratio_calibrator_path = value;
+        } else if (key == "--ratio-operating-point-id") {
+            options.ratio_operating_point_id = value;
+        } else if (key == "--allow-diagnostic-operating-point") {
+            options.allow_diagnostic_operating_point =
+                parseBool(value, key);
         } else {
             throw std::runtime_error("Unknown argument: " + key);
         }
@@ -303,9 +378,11 @@ Options parseOptions(int argc, char** argv) {
     }
     if (options.mode != "correctness" &&
         options.mode != "shadow" &&
-        options.mode != "prune") {
+        options.mode != "prune" &&
+        options.mode != "ratio-shadow" &&
+        options.mode != "ratio-prune") {
         throw std::runtime_error(
-            "--mode must be correctness, shadow, or prune");
+            "unsupported --mode value");
     }
 #ifndef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
     if (options.mode == "shadow") {
@@ -313,6 +390,26 @@ Options parseOptions(int argc, char** argv) {
             "shadow mode requires HNSWLIB_ENABLE_V0_SHADOW_VALIDATION=ON");
     }
 #endif
+#ifndef HNSWLIB_ENABLE_V0_RATIO_SHADOW
+    if (options.mode == "ratio-shadow") {
+        throw std::runtime_error(
+            "ratio-shadow mode requires HNSWLIB_ENABLE_V0_RATIO_SHADOW=ON");
+    }
+#endif
+#ifndef HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING
+    if (options.mode == "ratio-prune") {
+        throw std::runtime_error(
+            "ratio-prune mode requires HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING=ON");
+    }
+#endif
+    if ((options.mode == "ratio-shadow" ||
+         options.mode == "ratio-prune") &&
+        (options.ratio_selected_path.empty() ||
+         options.ratio_calibrator_path.empty() ||
+         options.ratio_operating_point_id.empty())) {
+        throw std::runtime_error(
+            "ratio modes require selected, calibrator, and operating-point paths/ID");
+    }
 #ifndef HNSWLIB_ENABLE_V0_REAL_PRUNING
     if (options.mode == "prune") {
         throw std::runtime_error(
@@ -534,6 +631,35 @@ double recallAtK(
         static_cast<double>(k);
 }
 
+template<typename Queue>
+size_t matchCountAtK(
+    const Queue& result,
+    const uint32_t* ground_truth,
+    size_t k) {
+    const std::set<hnswlib::labeltype> labels =
+        labelsFromQueue(result);
+    size_t matches = 0U;
+    for (size_t i = 0U; i < k; ++i) {
+        matches += labels.count(
+            static_cast<hnswlib::labeltype>(ground_truth[i])) != 0U ?
+                1U : 0U;
+    }
+    return matches;
+}
+
+template<typename Queue>
+double recallAtOne(const Queue& result, const uint32_t* ground_truth) {
+    if (result.empty()) return 0.0;
+    Queue copy = result;
+    hnswlib::labeltype nearest = copy.top().second;
+    while (!copy.empty()) {
+        nearest = copy.top().second;
+        copy.pop();
+    }
+    return nearest ==
+        static_cast<hnswlib::labeltype>(ground_truth[0]) ? 1.0 : 0.0;
+}
+
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
 class CsvShadowCollector :
     public hnswlib::V0ShadowValidationCollector {
@@ -751,6 +877,114 @@ class CsvShadowCollector :
 };
 #endif
 
+#ifdef HNSWLIB_ENABLE_V0_RATIO_SHADOW
+class CsvRatioShadowCollector :
+    public hnswlib::V0RatioShadowCollector {
+ public:
+    CsvRatioShadowCollector(
+        const std::string& path,
+        const std::string& run_id,
+        size_t ef_search,
+        size_t modulus,
+        size_t remainder,
+        Totals* totals)
+        : output_(path.c_str()),
+          run_id_(run_id),
+          ef_search_(ef_search),
+          modulus_(modulus),
+          remainder_(remainder),
+          totals_(totals) {
+        if (!output_) {
+            throw std::runtime_error(
+                "Cannot create ratio_shadow_records.csv");
+        }
+        output_
+            << "ratio_shadow_schema_version,run_id,query_id,current_node_id,"
+            << "candidate_id,graph_layer,ef_search,current_squared_distance,"
+            << "threshold,current_lb,current_lb_valid,current_would_prune,edge_length,"
+            << "direction_error,reconstruction_norm,"
+            << "x_dot_reconstruction,kappa_meta,ratio_eligible,"
+            << "ratio_fallback_reason,rho_hat_raw,"
+            << "rho_hat_ratio,ratio_estimated_squared_distance,ratio_quantile,"
+            << "ratio_lb,ratio_effective_lb,ratio_used_current_fallback,"
+            << "ratio_would_prune,exact_squared_distance,oracle_would_prune,"
+            << "ratio_interval_violation,ratio_false_prune,calibrator_id\n";
+    }
+
+    void append(const hnswlib::V0RatioShadowRecord& record) override {
+        ++totals_->ratio_shadow_records_seen;
+        if (!isSampled(record) &&
+            !record.ratio_interval_violation &&
+            !record.ratio_false_prune) {
+            return;
+        }
+        output_
+            << hnswlib::V0_RATIO_SHADOW_SCHEMA_VERSION << ','
+            << csvEscape(run_id_) << ','
+            << record.query_id << ','
+            << record.current_node_id << ','
+            << record.candidate_id << ','
+            << record.graph_layer << ','
+            << ef_search_ << ','
+            << std::setprecision(17)
+            << record.current_squared_distance << ','
+            << record.threshold << ','
+            << record.current_lb << ','
+            << (record.current_lb_valid ? 1 : 0) << ','
+            << (record.current_would_prune ? 1 : 0) << ','
+            << record.edge_length << ','
+            << record.direction_error << ','
+            << record.reconstruction_norm << ','
+            << record.x_dot_reconstruction << ','
+            << record.kappa_meta << ','
+            << (record.ratio_eligible ? 1 : 0) << ','
+            << csvEscape(record.ratio_fallback_reason) << ','
+            << record.rho_hat_raw << ','
+            << record.rho_hat_ratio << ','
+            << record.ratio_estimated_squared_distance << ','
+            << record.ratio_quantile << ','
+            << record.ratio_lb << ','
+            << record.ratio_effective_lb << ','
+            << (record.ratio_used_current_fallback ? 1 : 0) << ','
+            << (record.ratio_would_prune ? 1 : 0) << ','
+            << record.exact_squared_distance << ','
+            << (record.oracle_would_prune ? 1 : 0) << ','
+            << (record.ratio_interval_violation ? 1 : 0) << ','
+            << (record.ratio_false_prune ? 1 : 0) << ','
+            << csvEscape(record.calibrator_id) << '\n';
+        if (!output_) {
+            throw std::runtime_error(
+                "Cannot write ratio_shadow_records.csv");
+        }
+        ++totals_->ratio_shadow_records_written;
+    }
+
+    void flush() {
+        output_.flush();
+        if (!output_) {
+            throw std::runtime_error(
+                "Cannot flush ratio_shadow_records.csv");
+        }
+    }
+
+ private:
+    bool isSampled(const hnswlib::V0RatioShadowRecord& record) const {
+        uint64_t key = mix64(record.query_id);
+        key ^= mix64(record.current_node_id + 0x632be59bd9b4e019ULL);
+        key ^= mix64(record.candidate_id + 0x8cb92baa3f3d8dd7ULL);
+        return key % static_cast<uint64_t>(modulus_) ==
+            static_cast<uint64_t>(remainder_);
+    }
+
+    std::ofstream output_;
+    std::string run_id_;
+    size_t ef_search_;
+    size_t modulus_;
+    size_t remainder_;
+    Totals* totals_;
+};
+#endif
+
 void addMetrics(
     Totals& totals,
     const hnswlib::V0QueryMetrics& metrics) {
@@ -765,11 +999,42 @@ void addMetrics(
     totals.false_prune += metrics.false_prune;
 }
 
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+void addRatioMetrics(
+    Totals& totals,
+    const hnswlib::V0RatioQueryMetrics& metrics) {
+    totals.ratio_bound_evaluated += metrics.ratio_bound_evaluated;
+    totals.ratio_eligible += metrics.ratio_eligible;
+    totals.ratio_bound_pruned += metrics.ratio_bound_pruned;
+    totals.ratio_current_lb_fallback +=
+        metrics.ratio_current_lb_fallback;
+    totals.ratio_current_lb_fallback_pruned +=
+        metrics.ratio_current_lb_fallback_pruned;
+    totals.ratio_exact_fallback += metrics.ratio_exact_fallback;
+    totals.ratio_invalid_fallback += metrics.ratio_invalid_fallback;
+    totals.ratio_exact_distance_saved += metrics.exact_distance_saved;
+    totals.ratio_oracle_prunable += metrics.oracle_prunable;
+    totals.ratio_interval_violation +=
+        metrics.ratio_interval_violation;
+    totals.ratio_false_prune += metrics.ratio_false_prune;
+    totals.ratio_false_prune_query_exposure +=
+        metrics.ratio_false_prune != 0U ? 1U : 0U;
+    totals.visited_nodes += metrics.visited_nodes;
+    totals.candidate_expansions += metrics.candidate_expansions;
+    totals.estimator_time_ns += metrics.estimator_time_ns;
+    totals.exact_distance_time_ns += metrics.exact_distance_time_ns;
+}
+#endif
+
 void writeMetadata(
     const Options& options,
     const DatasetConfig& dataset,
     const hnswlib::HierarchicalNSW<float>& index,
-    size_t query_count) {
+    size_t query_count
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+    , const hnswlib::V0RatioCalibrator* ratio_calibrator
+#endif
+    ) {
     const hnswlib::V0SidecarHeader& header =
         index.getEdgeQuantV0Metadata().header();
     std::ofstream out(
@@ -792,6 +1057,18 @@ void writeMetadata(
         << "  \"run_id\": \"" << jsonEscape(options.run_id) << "\",\n"
         << "  \"dataset_config\": \""
         << jsonEscape(options.dataset_config) << "\",\n"
+        << "  \"dataset_config_sha256\": \""
+        << hnswlib::edgeQuantV0Sha256Hex(
+               hnswlib::computeV0FileSha256(options.dataset_config))
+        << "\",\n"
+        << "  \"query_dataset_sha256\": \""
+        << hnswlib::edgeQuantV0Sha256Hex(
+               hnswlib::computeV0FileSha256(dataset.query_path))
+        << "\",\n"
+        << "  \"ground_truth_sha256\": \""
+        << hnswlib::edgeQuantV0Sha256Hex(
+               hnswlib::computeV0FileSha256(dataset.ground_truth_path))
+        << "\",\n"
         << "  \"index_path\": \"" << jsonEscape(options.index_path)
         << "\",\n"
         << "  \"sidecar_path\": \"" << jsonEscape(options.sidecar_path)
@@ -800,6 +1077,10 @@ void writeMetadata(
         << "  \"n_base\": " << dataset.n_base << ",\n"
         << "  \"query_start\": " << options.query_start << ",\n"
         << "  \"query_count\": " << query_count << ",\n"
+        << "  \"warmup_query_count\": "
+        << std::min(options.warmup_query_count, query_count) << ",\n"
+        << "  \"repetition\": " << options.repetition << ",\n"
+        << "  \"evaluation_order\": \"alternating_by_query_and_repetition\",\n"
         << "  \"k\": " << options.k << ",\n"
         << "  \"ef_search\": " << options.ef_search << ",\n"
         << "  \"M_pq\": " << header.pq_m << ",\n"
@@ -818,11 +1099,17 @@ void writeMetadata(
         << "\",\n"
         << "  \"sidecar_bytes\": " << fileSize(options.sidecar_path)
         << ",\n"
+        << "  \"sidecar_bytes_per_edge\": "
+        << (header.directed_edge_count == 0U ? 0.0 :
+            static_cast<double>(fileSize(options.sidecar_path)) /
+                static_cast<double>(header.directed_edge_count))
+        << ",\n"
         << "  \"real_pruning_enabled\": "
-        << (options.mode == "prune" ? "true" : "false")
+        << (options.mode == "prune" || options.mode == "ratio-prune" ?
+                "true" : "false")
         << ",\n"
         << "  \"bound_pruned_semantics\": "
-        << (options.mode == "prune" ?
+        << (options.mode == "prune" || options.mode == "ratio-prune" ?
                 "\"actual_prune\",\n" :
                 "\"would_prune_observe_only\",\n")
         << "  \"shadow_sample_modulus\": "
@@ -835,6 +1122,57 @@ void writeMetadata(
         << "\",\n"
         << "  \"working_tree_dirty\": \""
         << jsonEscape(options.working_tree_dirty) << "\",\n"
+        << "  \"compiler_id\": \"" HNSWLIB_CXX_COMPILER_ID "\",\n"
+        << "  \"compiler_version\": \"" << jsonEscape(__VERSION__)
+        << "\",\n"
+        << "  \"build_type\": \"" HNSWLIB_BUILD_TYPE "\",\n";
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+    if (ratio_calibrator != nullptr) {
+        out
+            << "  \"ratio_enabled\": true,\n"
+            << "  \"ratio_shadow_schema_version\": "
+            << hnswlib::V0_RATIO_SHADOW_SCHEMA_VERSION << ",\n"
+            << "  \"ratio_selected_path\": \""
+            << jsonEscape(ratio_calibrator->selectedPath()) << "\",\n"
+            << "  \"ratio_selected_sha256\": \""
+            << ratio_calibrator->selectedSha256() << "\",\n"
+            << "  \"ratio_calibrator_path\": \""
+            << jsonEscape(ratio_calibrator->calibratorPath()) << "\",\n"
+            << "  \"ratio_calibrator_id\": \""
+            << jsonEscape(ratio_calibrator->operatingPointId()) << "\",\n"
+            << "  \"ratio_calibrator_sha256\": \""
+            << ratio_calibrator->calibratorSha256() << "\",\n"
+            << "  \"ratio_calibration_dataset_sha256\": \""
+            << ratio_calibrator->calibrationDatasetSha256() << "\",\n"
+            << "  \"ratio_query_split_manifest_sha256\": \""
+            << ratio_calibrator->querySplitManifestSha256() << "\",\n"
+            << "  \"ratio_estimator_formula_version\": \""
+            << ratio_calibrator->formulaVersion() << "\",\n"
+            << "  \"ratio_alpha\": " << std::setprecision(17)
+            << ratio_calibrator->nominalAlpha() << ",\n"
+            << "  \"ratio_calibration_level\": \""
+            << ratio_calibrator->calibrationLevel() << "\",\n"
+            << "  \"ratio_quantile_decimal\": \""
+            << ratio_calibrator->quantileDecimal() << "\",\n"
+            << "  \"ratio_quantile_hex\": \""
+            << ratio_calibrator->quantileHex() << "\",\n"
+            << "  \"ratio_kappa_min\": "
+            << ratio_calibrator->kappaMin() << ",\n"
+            << "  \"ratio_fallback_policy\": \""
+            << ratio_calibrator->fallbackPolicy() << "\",\n"
+            << "  \"ratio_diagnostic_only\": "
+            << (ratio_calibrator->diagnosticOnly() ? "true" : "false")
+            << ",\n"
+            << "  \"ratio_trusted\": "
+            << (ratio_calibrator->trusted() ? "true" : "false")
+            << ",\n"
+            << "  \"ratio_norm_lut_bytes\": "
+            << index.getV0RatioCodebookNormLut().tableBytes() << ",\n";
+    } else {
+        out << "  \"ratio_enabled\": false,\n";
+    }
+#endif
+    out
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
         << "  \"shadow_validation_compiled\": true,\n"
 #else
@@ -846,9 +1184,24 @@ void writeMetadata(
         << "  \"spherical_cap_diagnostic_compiled\": false,\n"
 #endif
 #ifdef HNSWLIB_ENABLE_V0_REAL_PRUNING
-        << "  \"real_pruning_compiled\": true\n"
+        << "  \"real_pruning_compiled\": true,\n"
 #else
-        << "  \"real_pruning_compiled\": false\n"
+        << "  \"real_pruning_compiled\": false,\n"
+#endif
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+        << "  \"ratio_estimator_compiled\": true,\n"
+#else
+        << "  \"ratio_estimator_compiled\": false,\n"
+#endif
+#ifdef HNSWLIB_ENABLE_V0_RATIO_SHADOW
+        << "  \"ratio_shadow_compiled\": true,\n"
+#else
+        << "  \"ratio_shadow_compiled\": false,\n"
+#endif
+#ifdef HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING
+        << "  \"ratio_real_pruning_compiled\": true\n"
+#else
+        << "  \"ratio_real_pruning_compiled\": false\n"
 #endif
         << "}\n";
 }
@@ -856,18 +1209,38 @@ void writeMetadata(
 bool writeSummary(
     const Options& options,
     const Totals& totals) {
-    const bool valid =
-        totals.mismatch_queries == 0 &&
-        totals.lower_bound_violation == 0 &&
-        totals.false_prune == 0 &&
-        totals.raw_prunable <= totals.bound_evaluated &&
-        totals.oracle_prunable <= totals.bound_evaluated &&
-        (options.mode == "prune" ||
-            totals.exact_distance_saved == 0) &&
-        (options.mode != "prune" ||
-            totals.bound_pruned ==
-                totals.exact_distance_saved) &&
-        (options.mode != "shadow" || totals.bound_evaluated > 0);
+    bool valid = false;
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+    if (options.mode == "ratio-shadow") {
+        valid =
+            totals.mismatch_queries == 0U &&
+            totals.ratio_bound_evaluated > 0U &&
+            totals.ratio_bound_pruned <= totals.ratio_bound_evaluated &&
+            totals.ratio_exact_distance_saved == 0U &&
+            totals.ratio_shadow_records_seen ==
+                totals.ratio_bound_evaluated;
+    } else if (options.mode == "ratio-prune") {
+        valid =
+            totals.ratio_bound_evaluated > 0U &&
+            totals.ratio_bound_pruned <= totals.ratio_bound_evaluated &&
+            totals.ratio_bound_pruned ==
+                totals.ratio_exact_distance_saved &&
+            totals.ratio_shadow_records_seen == 0U;
+    } else
+#endif
+    {
+        valid =
+            totals.mismatch_queries == 0 &&
+            totals.lower_bound_violation == 0 &&
+            totals.false_prune == 0 &&
+            totals.raw_prunable <= totals.bound_evaluated &&
+            totals.oracle_prunable <= totals.bound_evaluated &&
+            (options.mode == "prune" ||
+                totals.exact_distance_saved == 0) &&
+            (options.mode != "prune" ||
+                totals.bound_pruned == totals.exact_distance_saved) &&
+            (options.mode != "shadow" || totals.bound_evaluated > 0);
+    }
     const double divisor =
         totals.query_count == 0 ?
             1.0 : static_cast<double>(totals.query_count);
@@ -887,9 +1260,21 @@ bool writeSummary(
         << totals.baseline_recall_sum / divisor << ",\n"
         << "  \"mean_v0_recall_at_k\": "
         << totals.v0_recall_sum / divisor << ",\n"
+        << "  \"mean_baseline_recall_at_1\": "
+        << totals.baseline_recall_at_1_sum / divisor << ",\n"
+        << "  \"mean_v0_recall_at_1\": "
+        << totals.v0_recall_at_1_sum / divisor << ",\n"
+        << "  \"recall_at_k_loss_percentage_points\": "
+        << 100.0 * (totals.baseline_recall_sum -
+                    totals.v0_recall_sum) / divisor << ",\n"
+        << "  \"mismatch_query_fraction\": "
+        << static_cast<double>(totals.mismatch_queries) / divisor << ",\n"
+        << "  \"worst_v0_recall_at_k\": "
+        << totals.worst_v0_recall_at_k << ",\n"
         << "  \"baseline_latency_ns\": "
         << totals.baseline_latency_ns << ",\n"
         << "  \"v0_latency_ns\": " << totals.v0_latency_ns << ",\n"
+        << "  \"peak_rss_bytes\": " << peakRssBytes() << ",\n"
         << "  \"bound_evaluated\": " << totals.bound_evaluated << ",\n"
         << "  \"bound_pruned\": " << totals.bound_pruned << ",\n"
         << "  \"raw_prunable\": " << totals.raw_prunable << ",\n"
@@ -906,6 +1291,45 @@ bool writeSummary(
         << totals.shadow_records_seen << ",\n"
         << "  \"shadow_records_written\": "
         << totals.shadow_records_written
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+        << ",\n"
+        << "  \"ratio_bound_evaluated\": "
+        << totals.ratio_bound_evaluated << ",\n"
+        << "  \"ratio_eligible\": " << totals.ratio_eligible << ",\n"
+        << "  \"ratio_bound_pruned\": "
+        << totals.ratio_bound_pruned << ",\n"
+        << "  \"ratio_current_lb_fallback\": "
+        << totals.ratio_current_lb_fallback << ",\n"
+        << "  \"ratio_current_lb_fallback_pruned\": "
+        << totals.ratio_current_lb_fallback_pruned << ",\n"
+        << "  \"ratio_exact_fallback\": "
+        << totals.ratio_exact_fallback << ",\n"
+        << "  \"ratio_invalid_fallback\": "
+        << totals.ratio_invalid_fallback << ",\n"
+        << "  \"ratio_exact_distance_saved\": "
+        << totals.ratio_exact_distance_saved << ",\n"
+        << "  \"ratio_oracle_prunable\": "
+        << totals.ratio_oracle_prunable << ",\n"
+        << "  \"ratio_interval_violation\": "
+        << totals.ratio_interval_violation << ",\n"
+        << "  \"ratio_false_prune\": "
+        << totals.ratio_false_prune << ",\n"
+        << "  \"ratio_false_prune_query_exposure\": "
+        << totals.ratio_false_prune_query_exposure << ",\n"
+        << "  \"ratio_shadow_records_seen\": "
+        << totals.ratio_shadow_records_seen << ",\n"
+        << "  \"ratio_shadow_records_written\": "
+        << totals.ratio_shadow_records_written << ",\n"
+        << "  \"visited_nodes\": " << totals.visited_nodes << ",\n"
+        << "  \"candidate_expansions\": "
+        << totals.candidate_expansions << ",\n"
+        << "  \"estimator_time_ns\": "
+        << totals.estimator_time_ns << ",\n"
+        << "  \"exact_distance_time_ns\": "
+        << totals.exact_distance_time_ns << ",\n"
+        << "  \"lost_ground_truth_neighbors\": "
+        << totals.lost_ground_truth_neighbors
+#endif
 #ifdef HNSWLIB_ENABLE_V0_SPHERICAL_CAP_DIAGNOSTIC
         << ",\n"
         << "  \"cap_records_selected\": "
@@ -978,6 +1402,24 @@ void run(const Options& options) {
             "Dataset manifest does not match the validated sidecar");
     }
 
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+    std::unique_ptr<hnswlib::V0RatioCalibrator> ratio_calibrator;
+    if (options.mode == "ratio-shadow" || options.mode == "ratio-prune") {
+        ratio_calibrator.reset(new hnswlib::V0RatioCalibrator(
+            hnswlib::V0RatioCalibrator::load(
+                options.ratio_selected_path,
+                options.ratio_calibrator_path,
+                options.ratio_operating_point_id)));
+        if (options.mode == "ratio-prune" &&
+            ratio_calibrator->diagnosticOnly() &&
+            !options.allow_diagnostic_operating_point) {
+            throw std::runtime_error(
+                "Diagnostic-only ratio operating point requires "
+                "--allow-diagnostic-operating-point true");
+        }
+    }
+#endif
+
     Totals totals;
     std::ofstream query_out(
         (options.output_dir + "/query_metrics.csv").c_str());
@@ -986,11 +1428,20 @@ void run(const Options& options) {
     }
     query_out
         << "query_id,baseline_recall_at_k,v0_recall_at_k,"
+        << "baseline_recall_at_1,v0_recall_at_1,"
+        << "lost_ground_truth_neighbors,"
         << "results_equal,baseline_latency_ns,v0_latency_ns,"
         << "bound_evaluated,bound_pruned,raw_prunable,"
         << "oracle_prunable,exact_fallback,"
         << "exact_only_fallback,exact_distance_saved,"
-        << "lower_bound_violation,false_prune\n";
+        << "lower_bound_violation,false_prune,"
+        << "ratio_bound_evaluated,ratio_eligible,ratio_bound_pruned,"
+        << "ratio_current_lb_fallback,ratio_current_lb_fallback_pruned,"
+        << "ratio_exact_fallback,ratio_invalid_fallback,"
+        << "ratio_exact_distance_saved,ratio_oracle_prunable,"
+        << "ratio_interval_violation,ratio_false_prune,"
+        << "visited_nodes,candidate_expansions,estimator_time_ns,"
+        << "exact_distance_time_ns\n";
 
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
     std::unique_ptr<CsvShadowCollector> shadow_collector;
@@ -1008,48 +1459,119 @@ void run(const Options& options) {
     }
 #endif
 
+#ifdef HNSWLIB_ENABLE_V0_RATIO_SHADOW
+    std::unique_ptr<CsvRatioShadowCollector> ratio_shadow_collector;
+    if (options.mode == "ratio-shadow") {
+        ratio_shadow_collector.reset(new CsvRatioShadowCollector(
+            options.output_dir + "/ratio_shadow_records.csv",
+            options.run_id,
+            options.ef_search,
+            options.shadow_sample_modulus,
+            options.shadow_sample_remainder,
+            &totals));
+    }
+#endif
+
+    const size_t warmup_count = std::min(options.warmup_query_count, count);
+    for (size_t local = 0; local < warmup_count; ++local) {
+        const float* query = queries.data() + local * dataset.dimension;
+        index.searchKnn(query, options.k);
+        hnswlib::V0QueryMetrics warmup_metrics;
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+        hnswlib::V0RatioQueryMetrics ratio_warmup_metrics;
+#endif
+#ifdef HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING
+        if (options.mode == "ratio-prune") {
+            index.searchKnnV0RatioPruned(
+                query, options.k, *ratio_calibrator,
+                &ratio_warmup_metrics, nullptr);
+        } else
+#endif
+#ifdef HNSWLIB_ENABLE_V0_RATIO_SHADOW
+        if (options.mode == "ratio-shadow") {
+            index.searchKnnV0RatioShadow(
+                query, options.k, *ratio_calibrator,
+                &ratio_warmup_metrics, nullptr, nullptr, 0U);
+        } else
+#endif
+#ifdef HNSWLIB_ENABLE_V0_REAL_PRUNING
+        if (options.mode == "prune") {
+            index.searchKnnV0Pruned(
+                query, options.k, &warmup_metrics, nullptr);
+        } else
+#endif
+        {
+            index.searchKnnV0(query, options.k, &warmup_metrics, nullptr
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+                , nullptr, 0U
+#endif
+            );
+        }
+    }
+
     for (size_t local = 0; local < count; ++local) {
         const uint64_t query_id =
             static_cast<uint64_t>(options.query_start + local);
         const float* query =
             queries.data() + local * dataset.dimension;
 
-        const std::chrono::steady_clock::time_point baseline_start =
-            std::chrono::steady_clock::now();
-        const std::priority_queue<
-            std::pair<float, hnswlib::labeltype> > baseline =
-            index.searchKnn(query, options.k);
-        const std::chrono::steady_clock::time_point baseline_end =
-            std::chrono::steady_clock::now();
-
         hnswlib::V0QueryMetrics metrics;
-        const std::chrono::steady_clock::time_point v0_start =
-            std::chrono::steady_clock::now();
-        std::priority_queue<
-            std::pair<float, hnswlib::labeltype> > v0;
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+        hnswlib::V0RatioQueryMetrics ratio_metrics;
+#endif
+        typedef std::priority_queue<
+            std::pair<float, hnswlib::labeltype> > ResultQueue;
+        ResultQueue baseline;
+        ResultQueue v0;
+        std::chrono::steady_clock::time_point baseline_start;
+        std::chrono::steady_clock::time_point baseline_end;
+        std::chrono::steady_clock::time_point v0_start;
+        std::chrono::steady_clock::time_point v0_end;
+        const auto run_baseline = [&]() {
+            baseline_start = std::chrono::steady_clock::now();
+            baseline = index.searchKnn(query, options.k);
+            baseline_end = std::chrono::steady_clock::now();
+        };
+        const auto run_v0 = [&]() {
+            v0_start = std::chrono::steady_clock::now();
+#ifdef HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING
+            if (options.mode == "ratio-prune") {
+                v0 = index.searchKnnV0RatioPruned(
+                    query, options.k, *ratio_calibrator,
+                    &ratio_metrics, nullptr);
+            } else
+#endif
+#ifdef HNSWLIB_ENABLE_V0_RATIO_SHADOW
+            if (options.mode == "ratio-shadow") {
+                v0 = index.searchKnnV0RatioShadow(
+                    query, options.k, *ratio_calibrator,
+                    &ratio_metrics, nullptr,
+                    ratio_shadow_collector.get(), query_id);
+            } else
+#endif
 #ifdef HNSWLIB_ENABLE_V0_REAL_PRUNING
-        if (options.mode == "prune") {
-            v0 = index.searchKnnV0Pruned(
-                query,
-                options.k,
-                &metrics,
-                nullptr);
-        } else
+            if (options.mode == "prune") {
+                v0 = index.searchKnnV0Pruned(
+                    query, options.k, &metrics, nullptr);
+            } else
 #endif
-        {
-            v0 = index.searchKnnV0(
-                query,
-                options.k,
-                &metrics,
-                nullptr
+            {
+                v0 = index.searchKnnV0(
+                    query, options.k, &metrics, nullptr
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
-                , shadow_collector.get()
-                , query_id
+                    , shadow_collector.get(), query_id
 #endif
-            );
+                );
+            }
+            v0_end = std::chrono::steady_clock::now();
+        };
+        if (((local + options.repetition) & 1U) == 0U) {
+            run_baseline();
+            run_v0();
+        } else {
+            run_v0();
+            run_baseline();
         }
-        const std::chrono::steady_clock::time_point v0_end =
-            std::chrono::steady_clock::now();
 
         const uint64_t baseline_ns = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1064,6 +1586,17 @@ void run(const Options& options) {
             recallAtK(baseline, query_truth, options.k);
         const double v0_recall =
             recallAtK(v0, query_truth, options.k);
+        const double baseline_recall_at_1 =
+            recallAtOne(baseline, query_truth);
+        const double v0_recall_at_1 = recallAtOne(v0, query_truth);
+        const size_t baseline_match_count =
+            matchCountAtK(baseline, query_truth, options.k);
+        const size_t v0_match_count =
+            matchCountAtK(v0, query_truth, options.k);
+        const uint64_t lost_ground_truth_neighbors =
+            baseline_match_count > v0_match_count ?
+                static_cast<uint64_t>(baseline_match_count - v0_match_count) :
+                0U;
 
         ++totals.query_count;
         totals.mismatch_queries += equal ? 0U : 1U;
@@ -1071,12 +1604,23 @@ void run(const Options& options) {
         totals.v0_latency_ns += v0_ns;
         totals.baseline_recall_sum += baseline_recall;
         totals.v0_recall_sum += v0_recall;
+        totals.baseline_recall_at_1_sum += baseline_recall_at_1;
+        totals.v0_recall_at_1_sum += v0_recall_at_1;
+        totals.worst_v0_recall_at_k =
+            std::min(totals.worst_v0_recall_at_k, v0_recall);
         addMetrics(totals, metrics);
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+        totals.lost_ground_truth_neighbors += lost_ground_truth_neighbors;
+        addRatioMetrics(totals, ratio_metrics);
+#endif
 
         query_out
             << query_id << ','
             << std::setprecision(17) << baseline_recall << ','
             << v0_recall << ','
+            << baseline_recall_at_1 << ','
+            << v0_recall_at_1 << ','
+            << lost_ground_truth_neighbors << ','
             << (equal ? 1 : 0) << ','
             << baseline_ns << ','
             << v0_ns << ','
@@ -1088,7 +1632,26 @@ void run(const Options& options) {
             << metrics.exact_only_fallback << ','
             << metrics.exact_distance_saved << ','
             << metrics.lower_bound_violation << ','
-            << metrics.false_prune << '\n';
+            << metrics.false_prune << ','
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+            << ratio_metrics.ratio_bound_evaluated << ','
+            << ratio_metrics.ratio_eligible << ','
+            << ratio_metrics.ratio_bound_pruned << ','
+            << ratio_metrics.ratio_current_lb_fallback << ','
+            << ratio_metrics.ratio_current_lb_fallback_pruned << ','
+            << ratio_metrics.ratio_exact_fallback << ','
+            << ratio_metrics.ratio_invalid_fallback << ','
+            << ratio_metrics.exact_distance_saved << ','
+            << ratio_metrics.oracle_prunable << ','
+            << ratio_metrics.ratio_interval_violation << ','
+            << ratio_metrics.ratio_false_prune << ','
+            << ratio_metrics.visited_nodes << ','
+            << ratio_metrics.candidate_expansions << ','
+            << ratio_metrics.estimator_time_ns << ','
+            << ratio_metrics.exact_distance_time_ns << '\n';
+#else
+            << "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
+#endif
         if (!query_out) {
             throw std::runtime_error(
                 "Cannot write query_metrics.csv");
@@ -1103,8 +1666,17 @@ void run(const Options& options) {
         shadow_collector->flush();
     }
 #endif
+#ifdef HNSWLIB_ENABLE_V0_RATIO_SHADOW
+    if (ratio_shadow_collector) {
+        ratio_shadow_collector->flush();
+    }
+#endif
 
-    writeMetadata(options, dataset, index, count);
+    writeMetadata(options, dataset, index, count
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+        , ratio_calibrator.get()
+#endif
+    );
     const bool valid = writeSummary(options, totals);
     if (!valid) {
         throw std::runtime_error(
@@ -1127,15 +1699,31 @@ void run(const Options& options) {
         << "v0_search_runner_ok"
         << " mode=" << options.mode
         << " queries=" << totals.query_count
-        << " bound_evaluated=" << totals.bound_evaluated
-        << (options.mode == "prune" ?
+        << " bound_evaluated="
+#ifdef HNSWLIB_ENABLE_V0_RATIO_ESTIMATOR
+        << ((options.mode == "ratio-shadow" || options.mode == "ratio-prune") ?
+                totals.ratio_bound_evaluated : totals.bound_evaluated)
+        << ((options.mode == "prune" || options.mode == "ratio-prune") ?
                 " pruned=" : " would_prune=")
-        << totals.bound_pruned
+        << ((options.mode == "ratio-shadow" || options.mode == "ratio-prune") ?
+                totals.ratio_bound_pruned : totals.bound_pruned)
         << " exact_distance_saved="
-        << totals.exact_distance_saved
+        << ((options.mode == "ratio-shadow" || options.mode == "ratio-prune") ?
+                totals.ratio_exact_distance_saved : totals.exact_distance_saved)
         << " lower_bound_violation="
-        << totals.lower_bound_violation
+        << ((options.mode == "ratio-shadow" || options.mode == "ratio-prune") ?
+                totals.ratio_interval_violation : totals.lower_bound_violation)
+        << " false_prune="
+        << ((options.mode == "ratio-shadow" || options.mode == "ratio-prune") ?
+                totals.ratio_false_prune : totals.false_prune)
+#else
+        << totals.bound_evaluated
+        << (options.mode == "prune" ? " pruned=" : " would_prune=")
+        << totals.bound_pruned
+        << " exact_distance_saved=" << totals.exact_distance_saved
+        << " lower_bound_violation=" << totals.lower_bound_violation
         << " false_prune=" << totals.false_prune
+#endif
         << std::endl;
 }
 
