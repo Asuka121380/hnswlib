@@ -1,0 +1,14 @@
+{
+  "format": "eq_rcp_operational_dataset_schema",
+  "version": 1,
+  "source_of_truth": "scripts/eq_rcp/operational_dataset.py:schema_document",
+  "tables": ["queries.parquet", "edges.parquet", "events.parquet"],
+  "edge_key": ["source_internal_id", "target_internal_id", "graph_layer"],
+  "semantic_hash": "SHA-256 over fixed-order logical columns, explicit little-endian scalar encodings, and path-free semantic config",
+  "notes": [
+    "The builder emits the complete machine-readable schema.json beside every dataset.",
+    "Exact Delta vectors are reconstructed from frozen base vectors and are not duplicated in the dataset.",
+    "neighbor_slot=-1 means that the native frozen index was unavailable and adjacency was not validated.",
+    "Label-only columns must never be supplied to the online estimator."
+  ]
+}

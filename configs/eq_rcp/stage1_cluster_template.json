@@ -1,0 +1,54 @@
+{
+  "format": "eq_rcp_operational_dataset",
+  "version": 1,
+  "dataset_id": "REPLACE_WITH_FORMAL_DATASET_ID",
+  "dataset_role": "formal",
+  "logical_artifacts": {
+    "records": "REPLACE_WITH_TRACE_LOGICAL_ID",
+    "base_vectors": "REPLACE_WITH_BASE_LOGICAL_ID",
+    "query_vectors": "REPLACE_WITH_FRESH_QUERY_LOGICAL_ID",
+    "internal_to_label": "REPLACE_WITH_MAPPING_LOGICAL_ID",
+    "mapping_manifest": "REPLACE_WITH_MAPPING_MANIFEST_LOGICAL_ID",
+    "index": "REPLACE_WITH_FROZEN_INDEX_LOGICAL_ID"
+  },
+  "paths": {
+    "records": "REPLACE_WITH_CLUSTER_TRACE_PATH",
+    "base_vectors": "REPLACE_WITH_CLUSTER_BASE_FVECS_PATH",
+    "query_vectors": "REPLACE_WITH_CLUSTER_FRESH_QUERY_FVECS_PATH",
+    "internal_to_label": "REPLACE_WITH_CLUSTER_MAPPING_NPY_PATH",
+    "mapping_manifest": "REPLACE_WITH_CLUSTER_MAPPING_MANIFEST_PATH",
+    "index": "REPLACE_WITH_CLUSTER_NATIVE_HNSW_INDEX_PATH"
+  },
+  "expected_sha256": {
+    "records": "REPLACE",
+    "base_vectors": "REPLACE",
+    "query_vectors": "REPLACE",
+    "internal_to_label": "REPLACE",
+    "mapping_manifest": "REPLACE",
+    "index": "REPLACE"
+  },
+  "query_mapping": {
+    "mode": "query_id_is_row",
+    "offset": 0
+  },
+  "split": {
+    "seed": 20260810,
+    "fractions": [
+      {"name": "quantizer_train", "fraction": 0.45},
+      {"name": "decoder_train", "fraction": 0.15},
+      {"name": "model_selection", "fraction": 0.15},
+      {"name": "risk_calibration", "fraction": 0.15},
+      {"name": "final_test", "fraction": 0.10}
+    ]
+  },
+  "build": {
+    "batch_size": 4096
+  },
+  "validation": {
+    "expected_rows": null,
+    "distance_abs_tolerance": 0.00001,
+    "expected_oracle_prunable_fraction": null,
+    "oracle_fraction_tolerance": 1e-12,
+    "require_index_adjacency_validation": true
+  }
+}

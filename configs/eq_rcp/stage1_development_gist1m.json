@@ -1,0 +1,54 @@
+{
+  "format": "eq_rcp_operational_dataset",
+  "version": 1,
+  "dataset_id": "gist1m_stageb_radius_q1000_development_v1",
+  "dataset_role": "development",
+  "logical_artifacts": {
+    "records": "gist1m/radius-v2/stageB/q1000/candidate-metrics",
+    "base_vectors": "gist1m/base/fvecs-1000000x960",
+    "query_vectors": "gist1m/query/fvecs-1000x960",
+    "internal_to_label": "gist1m/frozen-index/internal-to-label",
+    "mapping_manifest": "gist1m/frozen-index/internal-to-label-manifest",
+    "index": "gist1m/frozen-hnsw/index-35be7096"
+  },
+  "paths": {
+    "records": "C:\\ANU\\IndividualProject\\8.3\\20260803-radius-v2-q1000\\analysis-stageB-radius-q1000\\candidate_metrics.parquet",
+    "base_vectors": "C:\\ANU\\IndividualProject\\datasets\\gist1m\\gist_base.fvecs",
+    "query_vectors": "C:\\ANU\\IndividualProject\\datasets\\gist1m\\gist_query.fvecs",
+    "internal_to_label": "C:\\ANU\\IndividualProject\\datasets\\gist1m\\gist1m_internal_to_label.npy",
+    "mapping_manifest": "C:\\ANU\\IndividualProject\\datasets\\gist1m\\gist1m_internal_to_label.manifest.json",
+    "index": null
+  },
+  "expected_sha256": {
+    "records": "d17b5df324de81df44e6ada00a218af3ee4d872f656d0df25804c3a77b65d1a5",
+    "base_vectors": "73418110328f5aa522d9f6b0cd9115a6c515dc44e3c48420e506ddeddbdbdbc0",
+    "query_vectors": "0d1d620049de12da455ed7201e97cbab372c4d54d0e6dedbc8c503f62c911299",
+    "internal_to_label": "109438c81fb9ef90eba4ebbf42cfc6ccfbfe11e7e36cbedf862bf5d18913ef57",
+    "mapping_manifest": "019409a8dc4d0083114442eac6c58abdc9427dbb528378f5b8562528fcd5ef3a",
+    "index": "35be7096a3e482b94f429ccf17dbeaaf70732f0e5b7bed690d9a27ecbbdcb1a6"
+  },
+  "query_mapping": {
+    "mode": "query_id_is_row",
+    "offset": 0
+  },
+  "split": {
+    "seed": 20260810,
+    "fractions": [
+      {"name": "development_quantizer_train", "fraction": 0.45},
+      {"name": "development_decoder_train", "fraction": 0.15},
+      {"name": "development_model_selection", "fraction": 0.15},
+      {"name": "development_risk_calibration", "fraction": 0.15},
+      {"name": "development_final_test", "fraction": 0.10}
+    ]
+  },
+  "build": {
+    "batch_size": 4096
+  },
+  "validation": {
+    "expected_rows": 211836,
+    "distance_abs_tolerance": 0.00001,
+    "expected_oracle_prunable_fraction": 0.8742848241092166,
+    "oracle_fraction_tolerance": 1e-15,
+    "require_index_adjacency_validation": false
+  }
+}
