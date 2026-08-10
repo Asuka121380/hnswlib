@@ -1,0 +1,24 @@
+{
+  "format": "eq_rcp_stage2_1_experiment_contract",
+  "version": 1,
+  "primary_object": "directed edge displacement Delta=v-c",
+  "code_budget": {
+    "bytes": 32,
+    "layout": "32 uint8 subcodes",
+    "ell_squared_included": false,
+    "rule": "ell_squared is existing shared metadata and is available to every method"
+  },
+  "encoder_inputs": ["Delta", "static_group"],
+  "forbidden_encoder_inputs": ["query", "threshold", "label"],
+  "causal_matrix": {
+    "B0": "direct_delta_pq",
+    "B1": "direct_delta_opq",
+    "B2": "norm_corrected_pq",
+    "B3": "norm_corrected_opq",
+    "B4": "direction_pq_exact_length",
+    "B5": "gain_shape_opq"
+  },
+  "oae_fixes": ["grouped_oae_diagonal", "grouped_oae_block", "opq_operational_refined"],
+  "formal_requirements": ["fresh formal Stage 1", "full query splits", "formal adjacency PASS", "at least 3 seeds"],
+  "hard_rule": "Pilot/subsampled evidence cannot authorize GO_CPP. A selected method need not be OAE."
+}

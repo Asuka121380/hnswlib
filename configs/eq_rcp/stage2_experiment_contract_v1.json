@@ -1,0 +1,25 @@
+{
+  "format": "eq_rcp_stage2_experiment_contract",
+  "version": 1,
+  "primary_object": "directed edge displacement Delta=v-c",
+  "code_budget": {
+    "bytes": 32,
+    "layout": "32 independent uint8 subcodes",
+    "ell_squared_included": false
+  },
+  "encoder_inputs": ["Delta", "static_group"],
+  "metric_training_inputs": ["X=q-c", "training-only weight"],
+  "label_only": ["y_exact", "candidate_squared_distance", "margin", "oracle_prunable"],
+  "primary_metrics": [
+    "projection_mse",
+    "projection_abs_q95",
+    "projection_abs_q99",
+    "projection_abs_q999"
+  ],
+  "decision_diagnostics": {
+    "calibrated_coverage": "cutoff frozen on decoder_train queries",
+    "score_oracle_coverage": "optimistic scalar reconstruction-score cutoff selected on evaluation labels",
+    "code_oracle_coverage": "flexible decoder trained on decoder_train code/block features; final risk cutoff selected on evaluation labels, so diagnostic ceiling only"
+  },
+  "hard_rule": "Development or subsampled runs always return PENDING_FORMAL_STAGE2."
+}

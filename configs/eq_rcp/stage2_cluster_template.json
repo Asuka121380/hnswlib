@@ -1,0 +1,62 @@
+{
+  "format": "eq_rcp_flat_oae_ceiling",
+  "version": 1,
+  "run_role": "formal_ceiling",
+  "allow_formal_gate_decision": true,
+  "stage1_dataset_dir": "REPLACE_WITH_FORMAL_STAGE1_DATASET_DIR",
+  "expected_stage1_dataset_semantic_sha256": "REPLACE",
+  "selection": {
+    "seed": 20260810,
+    "quantizer_train": {"split": "quantizer_train", "max_queries": null},
+    "decoder_train": {"split": "decoder_train", "max_queries": null},
+    "evaluation": {"split": "model_selection", "max_queries": null}
+  },
+  "methods": [
+    "direct_delta_pq",
+    "direct_delta_opq",
+    "oae_diagonal",
+    "oae_block",
+    "oae_full",
+    "direction_pq_reference"
+  ],
+  "seeds": [17, 43, 97],
+  "quantizer": {
+    "code_bytes": 32,
+    "subquantizers": 32,
+    "centroids": 256,
+    "max_iter": 50,
+    "batch_size": 4096,
+    "opq_iterations": 3,
+    "metric_block_size": 30,
+    "metric_shrinkage": 0.05,
+    "metric_ridge": 0.001
+  },
+  "objective_weight": {
+    "mode": "raw",
+    "minimum": 0.05,
+    "tau": 0.01
+  },
+  "evaluation": {
+    "near_margin_quantile": 0.10,
+    "diagnostic_false_prune_alpha": 0.001
+  },
+  "flexible_code_oracle": {
+    "learning_rate": 0.05,
+    "max_iter": 200,
+    "max_leaf_nodes": 63,
+    "min_samples_leaf": 50,
+    "l2_regularization": 1.0
+  },
+  "bootstrap": {
+    "seed": 20260810,
+    "samples": 10000,
+    "confidence": 0.95
+  },
+  "gate": {
+    "minimum_q99_reduction": 0.10,
+    "minimum_paired_ci_lower": 0.0,
+    "minimum_code_oracle_coverage_gain": 0.02,
+    "minimum_ideal_coverage": 0.10
+  },
+  "notes": "GO_CPP is possible only with a formal Stage 1 dataset, adjacency PASS, full query splits, and all Gate criteria PASS."
+}

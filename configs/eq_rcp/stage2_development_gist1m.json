@@ -1,0 +1,71 @@
+{
+  "format": "eq_rcp_flat_oae_ceiling",
+  "version": 1,
+  "run_role": "development_pilot",
+  "allow_formal_gate_decision": false,
+  "stage1_dataset_dir": "C:\\ANU\\IndividualProject\\Implementation\\hnswlib\\results\\eq_rcp\\stage1\\development\\20260810-180305-951\\materialization-a",
+  "expected_stage1_dataset_semantic_sha256": "2cca1c36ddba3cbde3ddc5191435a2c55decf5c0cee23015a1a81b2b17e4aebf",
+  "selection": {
+    "seed": 20260810,
+    "quantizer_train": {
+      "split": "development_quantizer_train",
+      "max_queries": 40
+    },
+    "decoder_train": {
+      "split": "development_decoder_train",
+      "max_queries": 30
+    },
+    "evaluation": {
+      "split": "development_model_selection",
+      "max_queries": 40
+    }
+  },
+  "methods": [
+    "direct_delta_pq",
+    "direct_delta_opq",
+    "oae_diagonal",
+    "oae_block",
+    "oae_full",
+    "direction_pq_reference"
+  ],
+  "seeds": [17, 43],
+  "quantizer": {
+    "code_bytes": 32,
+    "subquantizers": 32,
+    "centroids": 256,
+    "max_iter": 8,
+    "batch_size": 1024,
+    "opq_iterations": 1,
+    "metric_block_size": 30,
+    "metric_shrinkage": 0.05,
+    "metric_ridge": 0.001
+  },
+  "objective_weight": {
+    "mode": "raw",
+    "minimum": 0.05,
+    "tau": 0.01
+  },
+  "evaluation": {
+    "near_margin_quantile": 0.10,
+    "diagnostic_false_prune_alpha": 0.01
+  },
+  "flexible_code_oracle": {
+    "learning_rate": 0.08,
+    "max_iter": 80,
+    "max_leaf_nodes": 31,
+    "min_samples_leaf": 30,
+    "l2_regularization": 1.0
+  },
+  "bootstrap": {
+    "seed": 20260810,
+    "samples": 2000,
+    "confidence": 0.95
+  },
+  "gate": {
+    "minimum_q99_reduction": 0.10,
+    "minimum_paired_ci_lower": 0.0,
+    "minimum_code_oracle_coverage_gain": 0.02,
+    "minimum_ideal_coverage": 0.10
+  },
+  "notes": "Development-only query-level subsample. It cannot authorize GO_CPP."
+}

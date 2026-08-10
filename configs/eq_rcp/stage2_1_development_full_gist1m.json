@@ -1,0 +1,48 @@
+{
+  "format": "eq_rcp_stage2_1_representation_selection",
+  "version": 1,
+  "run_role": "development_full",
+  "allow_formal_gate_decision": false,
+  "stage1_dataset_dir": "C:\\ANU\\IndividualProject\\Implementation\\hnswlib\\results\\eq_rcp\\stage1\\development\\20260810-180305-951\\materialization-a",
+  "expected_stage1_dataset_semantic_sha256": "2cca1c36ddba3cbde3ddc5191435a2c55decf5c0cee23015a1a81b2b17e4aebf",
+  "selection": {
+    "seed": 20260810,
+    "quantizer_train": {"split": "development_quantizer_train", "max_queries": null},
+    "decoder_train": {"split": "development_decoder_train", "max_queries": null},
+    "model_selection": {"split": "development_model_selection", "max_queries": null},
+    "risk_calibration": {"split": "development_risk_calibration", "max_queries": null},
+    "final_test": {"split": "development_final_test", "max_queries": null}
+  },
+  "methods": [
+    "direct_delta_pq", "direct_delta_opq", "norm_corrected_pq",
+    "norm_corrected_opq", "direction_pq_exact_length", "gain_shape_opq",
+    "grouped_oae_diagonal", "grouped_oae_block", "opq_operational_refined"
+  ],
+  "seeds": [17, 43, 97],
+  "quantizer": {
+    "code_bytes": 32, "subquantizers": 32, "centroids": 256,
+    "max_iter": 8, "batch_size": 1024, "opq_iterations": 1,
+    "metric_block_size": 30, "metric_shrinkage": 0.05,
+    "metric_ridge": 0.001, "length_groups": 4,
+    "refinement_iterations": 1, "refinement_ridge": 0.001,
+    "rollback_tolerance": 0.0
+  },
+  "objective_weight": {"mode": "smooth_threshold", "minimum": 0.05, "tau": 0.01},
+  "evaluation": {"near_margin_quantile": 0.10, "diagnostic_false_prune_alpha": 0.01, "risk_confidence": 0.95},
+  "analysis": {"length_bins": 10, "margin_bins": 10, "attribution_tracking_tolerance": 0.02},
+  "flexible_code_oracle": {
+    "learning_rate": 0.08, "max_iter": 80, "max_leaf_nodes": 31,
+    "min_samples_leaf": 30, "l2_regularization": 1.0
+  },
+  "bootstrap": {"seed": 20260810, "samples": 2000, "confidence": 0.95},
+  "gate": {
+    "target_q99_reduction": 0.10, "minimum_paired_ci_lower": 0.0,
+    "maximum_near_q99_ratio": 1.0, "maximum_q999_ratio": 1.05,
+    "minimum_diagnostic_coverage": 0.10,
+    "maximum_false_prune_rate_over_good": 0.01,
+    "minimum_code_oracle_coverage": 0.10,
+    "maximum_model_parameter_bytes": 67108864,
+    "allow_opq_fallback": true
+  },
+  "notes": "Frozen five-way full-development Stage 2.1 Gate configuration."
+}
