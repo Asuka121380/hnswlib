@@ -23,6 +23,13 @@ option(HNSWLIB_ENABLE_V0_RATIO_SHADOW "Enable observe-only Phase-4 ratio shadow 
 option(HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING "Enable Phase-4 ratio pruning in HNSW control flow." OFF)
 option(HNSWLIB_ENABLE_V0_RATIO_FINE_GRAINED_TIMING "Enable candidate-level Phase-4 ratio timing diagnostics." OFF)
 option(HNSWLIB_BUILD_FAISS_PQ_TOOLS "Build Faiss-based offline V0 PQ tools." OFF)
+
+option(HNSWLIB_ENABLE_EQ_RCP "Enable the feature-isolated EQ-RCP implementation surface." OFF)
+option(HNSWLIB_ENABLE_EQ_RCP_SHADOW "Enable observe-only EQ-RCP shadow validation." OFF)
+option(HNSWLIB_ENABLE_EQ_RCP_REAL_PRUNING "Enable EQ-RCP pruning in HNSW control flow." OFF)
+option(HNSWLIB_ENABLE_EQ_RCP_FINE_TIMING "Enable candidate-level EQ-RCP timing diagnostics." OFF)
+option(HNSWLIB_BUILD_EQ_RCP_TOOLS "Build offline EQ-RCP encoding and inspection tools." OFF)
+
 set(FAISS_INCLUDE_DIR "" CACHE PATH "Faiss source/install root containing faiss/impl/ProductQuantizer.h")
 set(FAISS_LIBRARY "" CACHE FILEPATH "Path to the Faiss CPU shared/static library")
 
@@ -87,6 +94,37 @@ if(HNSWLIB_BUILD_FAISS_PQ_TOOLS AND NOT HNSWLIB_ENABLE_EDGE_QUANT_V0)
         "HNSWLIB_BUILD_FAISS_PQ_TOOLS requires HNSWLIB_ENABLE_EDGE_QUANT_V0=ON")
 endif()
 
+if(HNSWLIB_ENABLE_EQ_RCP_SHADOW AND NOT HNSWLIB_ENABLE_EQ_RCP)
+    message(FATAL_ERROR
+        "HNSWLIB_ENABLE_EQ_RCP_SHADOW requires HNSWLIB_ENABLE_EQ_RCP=ON")
+endif()
+
+if(HNSWLIB_ENABLE_EQ_RCP_REAL_PRUNING AND NOT HNSWLIB_ENABLE_EQ_RCP)
+    message(FATAL_ERROR
+        "HNSWLIB_ENABLE_EQ_RCP_REAL_PRUNING requires HNSWLIB_ENABLE_EQ_RCP=ON")
+endif()
+
+if(HNSWLIB_ENABLE_EQ_RCP_FINE_TIMING AND NOT HNSWLIB_ENABLE_EQ_RCP)
+    message(FATAL_ERROR
+        "HNSWLIB_ENABLE_EQ_RCP_FINE_TIMING requires HNSWLIB_ENABLE_EQ_RCP=ON")
+endif()
+
+if(HNSWLIB_BUILD_EQ_RCP_TOOLS AND NOT HNSWLIB_ENABLE_EQ_RCP)
+    message(FATAL_ERROR
+        "HNSWLIB_BUILD_EQ_RCP_TOOLS requires HNSWLIB_ENABLE_EQ_RCP=ON")
+endif()
+
+if(HNSWLIB_ENABLE_EQ_RCP_REAL_PRUNING AND HNSWLIB_ENABLE_EQ_RCP_SHADOW)
+    message(FATAL_ERROR
+        "EQ-RCP real-pruning and shadow validation must use separate builds")
+endif()
+
+if(HNSWLIB_ENABLE_EQ_RCP_REAL_PRUNING AND
+   (HNSWLIB_ENABLE_V0_REAL_PRUNING OR HNSWLIB_ENABLE_V0_RATIO_REAL_PRUNING))
+    message(FATAL_ERROR
+        "EQ-RCP real pruning is mutually exclusive with V0 real-pruning modes")
+endif()
+
 if(HNSWLIB_ENABLE_EDGE_QUANT_V0)
     target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_EDGE_QUANT_V0=1)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -129,6 +167,26 @@ endif()
 
 if(HNSWLIB_ENABLE_V0_RATIO_FINE_GRAINED_TIMING)
     target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_V0_RATIO_FINE_GRAINED_TIMING=1)
+endif()
+
+if(HNSWLIB_ENABLE_EQ_RCP)
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_EQ_RCP=1)
+endif()
+
+if(HNSWLIB_ENABLE_EQ_RCP_SHADOW)
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_EQ_RCP_SHADOW=1)
+endif()
+
+if(HNSWLIB_ENABLE_EQ_RCP_REAL_PRUNING)
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_EQ_RCP_REAL_PRUNING=1)
+endif()
+
+if(HNSWLIB_ENABLE_EQ_RCP_FINE_TIMING)
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_EQ_RCP_FINE_TIMING=1)
+endif()
+
+if(HNSWLIB_BUILD_EQ_RCP_TOOLS)
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_BUILD_EQ_RCP_TOOLS=1)
 endif()
 
 target_include_directories(hnswlib INTERFACE
@@ -237,6 +295,21 @@ if(HNSWLIB_EXAMPLES)
 
     add_executable(real_data_trace_runner examples/cpp/real_data_trace_runner.cpp)
     target_link_libraries(real_data_trace_runner hnswlib)
+
+    add_executable(
+      eq_rcp_semantic_probe EXCLUDE_FROM_ALL
+      tests/cpp/eq_rcp_semantic_probe.cpp)
+    target_link_libraries(eq_rcp_semantic_probe hnswlib)
+
+    if(HNSWLIB_ENABLE_EQ_RCP)
+      add_executable(
+        eq_rcp_feature_isolation_test
+        tests/cpp/eq_rcp_feature_isolation_test.cpp)
+      target_link_libraries(eq_rcp_feature_isolation_test hnswlib)
+      add_test(
+        NAME eq_rcp_feature_isolation_test
+        COMMAND eq_rcp_feature_isolation_test)
+    endif()
 
     if(HNSWLIB_ENABLE_BASELINE_TRACE)
       add_executable(baseline_trace_runner examples/cpp/baseline_trace_runner.cpp)

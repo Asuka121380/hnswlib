@@ -1,0 +1,37 @@
+{
+  "format": "eq_rcp_stage0_build_matrix_v1",
+  "valid_builds": [
+    {
+      "id": "feature_off",
+      "HNSWLIB_ENABLE_EQ_RCP": false,
+      "HNSWLIB_ENABLE_EQ_RCP_SHADOW": false,
+      "HNSWLIB_ENABLE_EQ_RCP_REAL_PRUNING": false
+    },
+    {
+      "id": "skeleton_on",
+      "HNSWLIB_ENABLE_EQ_RCP": true,
+      "HNSWLIB_ENABLE_EQ_RCP_SHADOW": false,
+      "HNSWLIB_ENABLE_EQ_RCP_REAL_PRUNING": false
+    }
+  ],
+  "invalid_builds": [
+    "shadow_without_root",
+    "real_without_root",
+    "timing_without_root",
+    "tools_without_root",
+    "eq_real_with_shadow",
+    "eq_real_with_v0_real",
+    "eq_real_with_ratio_real"
+  ],
+  "semantic_probe": {
+    "n_base": 512,
+    "n_query": 16,
+    "dimension": 64,
+    "k": 10,
+    "ef_search": 50,
+    "M": 16,
+    "ef_construction": 100,
+    "seed": 42,
+    "dco_sample_modulus": 1
+  }
+}
