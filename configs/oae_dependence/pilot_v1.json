@@ -1,0 +1,64 @@
+{
+  "schema": "oae_edge_query_dependence_contract_v1",
+  "dataset": "gist1m",
+  "dimension": 960,
+  "n_base": 1000000,
+  "paths": {
+    "learn": "$HOME/IndividualProject/datasets/gist1m/gist/gist_learn.fvecs",
+    "base": "$HOME/IndividualProject/datasets/gist1m/gist/gist_base.fvecs",
+    "index": "$HOME/IndividualProject/datasets/gist1m/indexes/gist1m_M16_efc200_seed42_gitfd11efdb86c6.bin",
+    "mapping": "$HOME/gist1m_internal_to_label.npy",
+    "v0_codebook": "${OAE_V0_CODEBOOK}"
+  },
+  "query_splits": {
+    "training": {"offset": 20000, "count": 500},
+    "validation": {"offset": 20500, "count": 500}
+  },
+  "excluded_query_ranges": [
+    {"name": "stage3_fresh", "offset": 10000, "count": 3000}
+  ],
+  "trace": {
+    "k": 10,
+    "ef_search": 100,
+    "M": 16,
+    "ef_construction": 200,
+    "seed": 42,
+    "threads": 1,
+    "dco_sample_modulus": 1,
+    "dco_sample_remainder": 0,
+    "collect_geometry": true,
+    "collect_distance_timing": false
+  },
+  "model": {
+    "probe_count": 32,
+    "direction_clusters": 8,
+    "length_bins": 4,
+    "shrinkage_pseudocount": 100.0,
+    "probe_seed": 20260811,
+    "group_seed": 20260811,
+    "bootstrap_seed": 20260811,
+    "bootstrap_repetitions": 2000,
+    "kmeans_iterations": 5,
+    "group_fit_edge_cap": 0,
+    "batch_size": 8192,
+    "secondary_batch_size": 2048
+  },
+  "gates": {
+    "primary_relative_improvement_minimum": 0.02,
+    "minimum_noninferior_probes": 16,
+    "maximum_single_query_contribution": 0.10
+  },
+  "resource_caps": {
+    "learn_queries_total": 1000,
+    "training_queries": 500,
+    "validation_queries": 500,
+    "probe_directions": 32,
+    "direction_clusters": 8,
+    "length_bins": 4,
+    "random_seeds": 1,
+    "bootstrap_repetitions": 2000,
+    "cpu_cores": 8,
+    "memory_gib": 32,
+    "wall_time_hours": 2
+  }
+}

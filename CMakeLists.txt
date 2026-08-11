@@ -315,6 +315,15 @@ if(HNSWLIB_EXAMPLES)
           v0_performance_summary_test
           PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         )
+        add_test(
+          NAME oae_dependence_test
+          COMMAND ${PYTHON_EXECUTABLE}
+                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/python/oae_dependence_test.py
+        )
+        set_tests_properties(
+          oae_dependence_test
+          PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        )
       endif()
     endif()
 endif()

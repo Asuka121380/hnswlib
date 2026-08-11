@@ -1,0 +1,21 @@
+{
+  "schema": "oae_edge_query_dependence_contract_constraints_v1",
+  "question": "Can static edge geometry predict unseen-query offset energy and V0 residual projection loss?",
+  "allowed_predictors": ["unit_edge_direction", "log_edge_length"],
+  "forbidden_predictors": ["query", "query_offset", "threshold", "search_progress", "candidate_label"],
+  "primary_gate": {
+    "relative_improvement_minimum": 0.02,
+    "bootstrap_unit": "query",
+    "bootstrap_repetitions": 2000,
+    "ci_lower_bound_strictly_positive": true,
+    "minimum_noninferior_probes": 16,
+    "maximum_single_query_contribution": 0.10
+  },
+  "scope_exclusions": [
+    "new_quantizer_training",
+    "pruning_estimator_training",
+    "HNSW_control_flow_changes",
+    "official_gist_query_usage",
+    "candidate_grid_search"
+  ]
+}
