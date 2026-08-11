@@ -1,0 +1,56 @@
+{
+  "format": "eq_rcp_stage3_experiment_contract",
+  "version": 1,
+  "stage": "3",
+  "scope": "offline_progressive_representation_development",
+  "required_representation_status": "GO_STAGE3_REPRESENTATION_DEV",
+  "required_risk_status": "PENDING_RISK_ESTIMATOR",
+  "selected_flat_representation": "gain_shape_opq",
+  "selected_parameterization_contract": "unit_direction_exact_gain",
+  "safety_fallback": "direct_delta_opq",
+  "flat_code_bytes": 32,
+  "candidate_layouts": [
+    {"name": "flat_32", "coarse_bytes": 32, "residual_bytes": 0},
+    {"name": "progressive_28_4", "coarse_bytes": 28, "residual_bytes": 4},
+    {"name": "progressive_24_8", "coarse_bytes": 24, "residual_bytes": 8},
+    {"name": "progressive_16_16", "coarse_bytes": 16, "residual_bytes": 16}
+  ],
+  "allocation_strategies": [
+    "uniform",
+    "operational_rate_distortion",
+    "joint_objective",
+    "greedy_residual"
+  ],
+  "residual_contract": {
+    "family": "gain_shape_tangent_direction_residual",
+    "gain_source": "stage1_edge_squared_length",
+    "gain_is_exact": true,
+    "zero_vector_guard": 1e-12,
+    "randomized_residual_allowed": false
+  },
+  "evaluation_roles": [
+    "bit_allocation_selection",
+    "stopping_calibration",
+    "final_test"
+  ],
+  "fresh_evaluation_queries_required": true,
+  "gate": {
+    "max_final_q99_relative_degradation": 0.05,
+    "min_coarse_only_fraction": 0.30,
+    "require_code_aware_information_noninferiority": true,
+    "require_stable_non_uniform_held_out_gain": true
+  },
+  "risk_semantics": {
+    "coverage_and_false_prune_are_diagnostic_only": true,
+    "authorizes_real_pruning": false,
+    "required_risk_unit_for_future_certificate": "query_cluster_or_dependence_robust"
+  },
+  "forbidden_actions": [
+    "reselect_flat_representation_family",
+    "promote_norm_corrected_opq_to_safety_fallback",
+    "reuse_consumed_stage2_1_final_test_for_tuning",
+    "retrain_flat_32b_baseline",
+    "real_hnsw_pruning",
+    "claim_full_search_risk_guarantee"
+  ]
+}
