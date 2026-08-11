@@ -134,12 +134,15 @@ class OaeDependenceTest(unittest.TestCase):
             for role, offset in (("training", 0), ("validation", 40)):
                 trace = root / f"{role}.csv"
                 with trace.open("w", encoding="utf-8") as handle:
-                    handle.write("query_id,current_node_label,neighbor_label,geometry_valid\n")
+                    handle.write("query_id,current_node_label,neighbor_label,geometry_valid,edge_length_cd\n")
                     for local in range(40):
-                        handle.write(f"{local},0,{(offset + local) % 2 + 1},1\n")
+                        handle.write(f"{local},0,{(offset + local) % 2 + 1},1,1\n")
+                    handle.write("0,1,2,1,0\n")
                 call("build_search_event_dataset.py", "--trace-csv", trace,
                      "--query-manifest", run / f"{role}_query_manifest.json",
                      "--output", run / f"{role}_events.npz")
+                event_manifest = json.loads((run / f"{role}_events.npz.manifest.json").read_text(encoding="utf-8"))
+                self.assertEqual(event_manifest["zero_length_events_skipped"], 1)
             call("run_synthetic_tests.py", "--output", run / "synthetic_test_report.json")
             call("evaluate_dependence.py", "--input-dir", run,
                  "--training-events", run / "training_events.npz",
