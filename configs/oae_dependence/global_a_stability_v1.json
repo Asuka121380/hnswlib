@@ -1,0 +1,26 @@
+{
+  "schema": "oae_global_a_stability_contract_v1",
+  "query_counts": [50, 100, 250, 500],
+  "decision_query_count": 250,
+  "split_half_query_count": 250,
+  "split_half_repetitions": 20,
+  "probe_count": 32,
+  "top_eigenspace_rank": 8,
+  "residual_edge_sample_count": 10000,
+  "top_fraction": 0.10,
+  "batch_size": 4096,
+  "seed": 20260811,
+  "thresholds": {
+    "matrix_relative_error_maximum": 0.05,
+    "split_half_relative_error_maximum": 0.075,
+    "prediction_correlation_minimum": 0.99,
+    "prediction_nrmse_maximum": 0.05,
+    "top_set_overlap_minimum": 0.90
+  },
+  "declarations": {
+    "training_queries_only": true,
+    "validation_events_forbidden": true,
+    "no_quantizer_training": true,
+    "no_hnsw_trace_rerun": true
+  }
+}

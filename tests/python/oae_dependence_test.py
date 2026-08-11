@@ -150,6 +150,27 @@ class OaeDependenceTest(unittest.TestCase):
             call("validate_run.py", "--run-dir", run)
             report = json.loads((run / "validation_report.json").read_text(encoding="utf-8"))
             self.assertEqual(report["status"], "PASS")
+            stability_config = {
+                "schema": "test", "query_counts": [10, 20, 40], "decision_query_count": 20,
+                "split_half_query_count": 20, "split_half_repetitions": 4, "probe_count": 4,
+                "top_eigenspace_rank": 2, "residual_edge_sample_count": 3,
+                "top_fraction": 0.5, "batch_size": 16, "seed": 7,
+                "thresholds": {"matrix_relative_error_maximum": 10.0,
+                               "split_half_relative_error_maximum": 10.0,
+                               "prediction_correlation_minimum": -1.0,
+                               "prediction_nrmse_maximum": 10.0,
+                               "top_set_overlap_minimum": 0.0},
+            }
+            stability_config_path = root / "stability.json"
+            stability_config_path.write_text(json.dumps(stability_config), encoding="utf-8")
+            stability_output = root / "stability-output"
+            call("analyze_global_a_stability.py", "--run-dir", run,
+                 "--training-events", run / "training_events.npz",
+                 "--config", stability_config_path, "--output-dir", stability_output)
+            stability_report = json.loads(
+                (stability_output / "global_a_stability_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(stability_report["training_query_count"], 40)
+            self.assertFalse(stability_report["validation_events_read"])
 
 
 if __name__ == "__main__":

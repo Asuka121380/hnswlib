@@ -63,3 +63,22 @@ Run controls, the one frozen evaluation, and fail-closed validation:
 ```
 
 The only scale-up decision is in `run_manifest.json`. A primary failure means stop the current edge-geometry-conditioned OAE direction; a pass only authorizes a small, separately preregistered quantizer study.
+
+## Training-only global A stability diagnostic
+
+After the formal run, the following independent diagnostic checks whether 500
+training queries were enough to estimate a global OAE metric. It does not read
+validation events, rerun HNSW, or train a quantizer.
+
+```bash
+"$PYTHON" scripts/oae_dependence/analyze_global_a_stability.py \
+  --run-dir "$RUN_ROOT" \
+  --training-events "$RUN_ROOT/training_events_nonzero.npz" \
+  --config configs/oae_dependence/global_a_stability_v1.json \
+  --output-dir "$RUN_ROOT/global-a-stability"
+```
+
+The report compares query-balanced diagonal and frozen-probe covariance
+estimates at 50, 100, 250, and 500 queries, repeats 20 independent 250/250
+split-half comparisons, and measures stability of the induced importance
+ranking on 10,000 frozen V0 residuals.
