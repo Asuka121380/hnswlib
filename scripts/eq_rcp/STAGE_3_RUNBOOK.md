@@ -35,3 +35,36 @@ randomized residual remains a Stage 11 challenger.
 All Stage 3 risk/coverage values are diagnostics while risk status is
 `PENDING_RISK_ESTIMATOR`; no output from this stage authorizes real pruning or
 constitutes a full-search probability guarantee.
+
+## Progressive experiment
+
+After the input freezer emits `READY_FOR_OFFLINE_STAGE3`, copy
+`configs/eq_rcp/stage3_progressive_template.json`, bind its fresh Stage 1
+materialization, and run:
+
+```powershell
+python scripts/eq_rcp/run_stage3_progressive.py `
+  --config configs/eq_rcp/my_stage3_progressive.json `
+  --output-dir results/eq_rcp/stage3/progressive/run-name
+
+python scripts/eq_rcp/fit_operational_rate_distortion.py `
+  --selection-report results/eq_rcp/stage3/progressive/run-name/selection_report.json `
+  --output results/eq_rcp/stage3/progressive/run-name/rate_distortion_report.json
+
+python scripts/eq_rcp/validate_stage3_progressive.py `
+  --input-manifest results/eq_rcp/stage3/input_freeze/ready/stage3_input_manifest.json `
+  --result-dir results/eq_rcp/stage3/progressive/run-name `
+  --output results/eq_rcp/stage3/progressive/run-name/validation_report.json
+```
+
+The runner uses the frozen Stage 2.1 gain-shape OPQ artifact as the flat 32B
+baseline. Progressive candidates reuse its rotation, train a coarse unit-shape
+code, project the remaining error into the tangent plane, and train one C1
+residual code. Decoding normalizes both stages and restores the exact edge gain.
+The 28+4 layout is supported through variable-width PQ blocks; the implementation
+does not require the vector dimension to be divisible by every byte allocation.
+
+Candidate families are frozen before stopping calibration. Only the selected
+candidate and frozen flat fallback are evaluated on the fresh final-test role.
+The Stage 3 Gate either emits `GO_PROGRESSIVE_STAGE3_DEV` or
+`RETAIN_FROZEN_FLAT_32B`; neither decision changes `PENDING_RISK_ESTIMATOR`.

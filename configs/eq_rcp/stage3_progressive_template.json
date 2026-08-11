@@ -1,0 +1,47 @@
+{
+  "format": "eq_rcp_stage3_progressive_quantization",
+  "version": 1,
+  "stage3_input_manifest": "C:\\path\\to\\ready\\stage3_input_manifest.json",
+  "experiment_contract": "configs/eq_rcp/stage3_experiment_contract_v1.json",
+  "stage2_1_result_dir": "results/eq_rcp/stage2_1/development_full/20260810-200725-326",
+  "training_stage1_dataset_dir": "results/eq_rcp/stage1/development/20260810-180305-951/materialization-a",
+  "evaluation_stage1_dataset_dir": "C:\\path\\to\\fresh\\stage3\\materialization",
+  "selection_seed": 20260811,
+  "quantizer_train": {
+    "split": "development_quantizer_train",
+    "max_queries": null
+  },
+  "candidate_layouts": [
+    {"name": "flat_32", "coarse_bytes": 32, "residual_bytes": 0},
+    {"name": "progressive_28_4", "coarse_bytes": 28, "residual_bytes": 4},
+    {"name": "progressive_24_8", "coarse_bytes": 24, "residual_bytes": 8},
+    {"name": "progressive_16_16", "coarse_bytes": 16, "residual_bytes": 16}
+  ],
+  "allocation_strategies": [
+    "uniform",
+    "operational_rate_distortion",
+    "joint_objective",
+    "greedy_residual"
+  ],
+  "quantizer": {
+    "centroids": 256,
+    "max_iter": 8,
+    "batch_size": 1024
+  },
+  "stopping_projection_coverage": 0.99,
+  "diagnostic_false_prune_alpha": 0.01,
+  "code_information": {
+    "learning_rate": 0.08,
+    "max_iter": 80,
+    "max_leaf_nodes": 31,
+    "min_samples_leaf": 30,
+    "l2_regularization": 1.0
+  },
+  "gate": {
+    "max_final_q99_relative_degradation": 0.05,
+    "min_coarse_only_fraction": 0.30,
+    "require_code_aware_information_noninferiority": true,
+    "require_stable_non_uniform_held_out_gain": true
+  },
+  "notes": "Bind only after freeze_stage3_inputs emits READY_FOR_OFFLINE_STAGE3."
+}
