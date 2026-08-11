@@ -219,7 +219,9 @@ def run_experiment(config_path: Path, output_dir: Path) -> dict[str, Any]:
         model_index: dict[tuple[int, str], tuple[Path, dict[str, Any]]] = {}
         for seed in seeds:
             binding = _load_selected_artifact(input_manifest, seed)
-            frozen_path = stage2_result / Path(binding["relative_path"])
+            frozen_path = stage2_result / Path(
+                str(binding["relative_path"]).replace("\\", "/")
+            )
             if _sha256(frozen_path) != binding["artifact_sha256"]:
                 raise ValueError(f"frozen Stage 2.1 artifact changed for seed {seed}")
             flat = ProgressiveGainShapeQuantizer.from_frozen_flat(frozen_path)

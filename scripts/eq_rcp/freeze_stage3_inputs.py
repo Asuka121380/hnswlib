@@ -47,7 +47,7 @@ def _artifact_bindings(
         raise ValueError(f"frozen Stage 2.1 artifact is missing: {name}")
     bindings: list[dict[str, Any]] = []
     for item in sorted(source, key=lambda value: int(value["seed"])):
-        artifact_path = result_dir / Path(item["relative_path"])
+        artifact_path = result_dir / Path(str(item["relative_path"]).replace("\\", "/"))
         if not artifact_path.is_file():
             raise FileNotFoundError(f"artifact file is missing: {artifact_path}")
         _require_hash(artifact_path, item["artifact_sha256"], f"{name} seed {item['seed']}")
