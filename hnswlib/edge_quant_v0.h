@@ -339,6 +339,23 @@ struct V0BoundResult {
     }
 };
 
+struct V0RawEstimateResult {
+    V0BoundStatus status;
+    double approximate_squared_distance;
+
+    V0RawEstimateResult()
+        : status(V0BoundStatus::InvalidEdgeMetadata),
+          approximate_squared_distance(0.0) {}
+
+    bool valid() const {
+        return status == V0BoundStatus::Valid;
+    }
+
+    bool requiresExactFallback() const {
+        return !valid();
+    }
+};
+
 // Per-query state only. It owns no index or sidecar storage and therefore
 // remains thread-local; the caller keeps the immutable metadata alive.
 // Evaluation is side-effect free and cannot prune or mutate HNSW state.
@@ -351,6 +368,23 @@ class EdgeQuantV0QueryContext {
 
     const V0QueryLut& lut() const {
         return lut_;
+    }
+
+    // Stage 3 correctness-first interface. This initial implementation
+    // deliberately reuses the strict evaluator so that its raw estimate is
+    // bit-for-bit identical to V0BoundResult::approximate_squared_distance.
+    // A dedicated fast path is deferred until the mechanism passes active
+    // Recall/DCO validation.
+    V0RawEstimateResult evaluateRaw(
+        const V0EdgeRecordView& edge,
+        double exact_current_squared_distance) const {
+        const V0BoundResult bound = evaluate(
+            edge, exact_current_squared_distance);
+        V0RawEstimateResult result;
+        result.status = bound.status;
+        result.approximate_squared_distance =
+            bound.approximate_squared_distance;
+        return result;
     }
 
     V0BoundResult evaluate(

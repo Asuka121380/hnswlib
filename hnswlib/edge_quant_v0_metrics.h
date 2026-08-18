@@ -1,8 +1,19 @@
 #pragma once
 
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
 
 namespace hnswlib {
+
+struct V0ApproxPruningConfig {
+    double beta = 1.0;
+    bool retry_enabled = true;
+
+    bool valid() const {
+        return std::isfinite(beta) && beta >= 1.0;
+    }
+};
 
 struct V0QueryMetrics {
     // In observe-only searches, bound_pruned counts decisions that would
@@ -21,6 +32,14 @@ struct V0QueryMetrics {
     uint64_t expanded_nodes = 0;
     uint64_t edge_scans = 0;
     uint64_t duplicate_encounters = 0;
+    uint64_t approx_eligible_first_visits = 0;
+    uint64_t approx_first_pruned = 0;
+    uint64_t approx_retry_encountered = 0;
+    uint64_t approx_retry_exact_distance = 0;
+    uint64_t approx_retry_inserted_candidate = 0;
+    uint64_t approx_retry_inserted_result = 0;
+    uint64_t approx_estimator_fallback = 0;
+    uint64_t approx_state_bytes = 0;
 
     void reset() {
         *this = V0QueryMetrics();

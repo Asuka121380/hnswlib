@@ -67,6 +67,7 @@ struct Options {
     size_t shadow_sample_modulus = 1024;
     size_t shadow_sample_remainder = 0;
     std::vector<double> retry_betas;
+    double approx_beta = 0.0;
 };
 
 struct Totals {
@@ -92,9 +93,27 @@ struct Totals {
     uint64_t retry_candidate_records_seen = 0;
     uint64_t retry_candidate_records_written = 0;
     uint64_t retry_query_summary_rows = 0;
+    uint64_t baseline_exact_distance_computed = 0;
+    uint64_t result_overlap_sum = 0;
+    uint64_t recall_loss_queries = 0;
+    uint64_t catastrophic_recall_loss_queries = 0;
+    uint64_t approx_eligible_first_visits = 0;
+    uint64_t approx_first_pruned = 0;
+    uint64_t approx_retry_encountered = 0;
+    uint64_t approx_retry_exact_distance = 0;
+    uint64_t approx_retry_inserted_candidate = 0;
+    uint64_t approx_retry_inserted_result = 0;
+    uint64_t approx_estimator_fallback = 0;
+    uint64_t approx_state_bytes_max = 0;
     double baseline_recall_sum = 0.0;
     double v0_recall_sum = 0.0;
+    double recall_loss_sum = 0.0;
 };
+
+bool isApproxActiveMode(const std::string& mode) {
+    return mode == "approx-no-retry" ||
+        mode == "approx-retry";
+}
 
 uint64_t mix64(uint64_t value) {
     value += 0x9e3779b97f4a7c15ULL;
@@ -245,6 +264,22 @@ size_t parseSize(const char* value, const std::string& name) {
     }
 }
 
+double parseBeta(const char* value, const std::string& name) {
+    try {
+        const std::string text(value);
+        size_t consumed = 0U;
+        const double parsed = std::stod(text, &consumed);
+        if (consumed != text.size() ||
+            !std::isfinite(parsed) || parsed < 1.0) {
+            throw std::runtime_error("invalid beta");
+        }
+        return parsed;
+    } catch (...) {
+        throw std::runtime_error(
+            "Invalid value for " + name + ": " + value);
+    }
+}
+
 std::string jsonDoubleArray(
     const std::vector<double>& values) {
     std::ostringstream out;
@@ -292,7 +327,7 @@ void printUsage(std::ostream& out) {
         << "  --index-path <hnsw-index>\n"
         << "  --sidecar-path <v0meta>\n"
         << "  --output-dir <directory>\n"
-        << "  --mode <correctness|shadow|retry-shadow|prune>\n"
+        << "  --mode <correctness|shadow|retry-shadow|prune|approx-no-retry|approx-retry>\n"
         << "  [--run-id <text>]\n"
         << "  [--query-start <non-negative-integer>]\n"
         << "  [--query-count <non-negative-integer; 0 means remaining>]\n"
@@ -301,6 +336,7 @@ void printUsage(std::ostream& out) {
         << "  [--shadow-sample-modulus <positive-integer>]\n"
         << "  [--shadow-sample-remainder <non-negative-integer>]\n"
         << "  [--retry-betas <comma-separated squared-distance scales>]\n"
+        << "  [--approx-beta <squared-distance scale >= 1>]\n"
         << "  [--producer-git-commit <text>]\n"
         << "  [--git-branch <text>]\n"
         << "  [--working-tree-dirty <true|false|unknown>]\n";
@@ -338,6 +374,8 @@ Options parseOptions(int argc, char** argv) {
             options.shadow_sample_remainder = parseSize(value, key);
         } else if (key == "--retry-betas") {
             options.retry_betas = parseBetas(value, key);
+        } else if (key == "--approx-beta") {
+            options.approx_beta = parseBeta(value, key);
         } else if (key == "--producer-git-commit") {
             options.producer_git_commit = value;
         } else if (key == "--git-branch") {
@@ -358,9 +396,11 @@ Options parseOptions(int argc, char** argv) {
     if (options.mode != "correctness" &&
         options.mode != "shadow" &&
         options.mode != "retry-shadow" &&
-        options.mode != "prune") {
+        options.mode != "prune" &&
+        options.mode != "approx-no-retry" &&
+        options.mode != "approx-retry") {
         throw std::runtime_error(
-            "--mode must be correctness, shadow, retry-shadow, or prune");
+            "--mode must be correctness, shadow, retry-shadow, prune, approx-no-retry, or approx-retry");
     }
 #ifndef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
     if (options.mode == "shadow") {
@@ -380,6 +420,12 @@ Options parseOptions(int argc, char** argv) {
             "prune mode requires HNSWLIB_ENABLE_V0_REAL_PRUNING=ON");
     }
 #endif
+#ifndef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+    if (isApproxActiveMode(options.mode)) {
+        throw std::runtime_error(
+            "active approximate modes require HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING=ON");
+    }
+#endif
     if (options.k == 0 || options.ef_search == 0 ||
         options.shadow_sample_modulus == 0) {
         throw std::runtime_error(
@@ -394,6 +440,17 @@ Options parseOptions(int argc, char** argv) {
         options.retry_betas.empty()) {
         throw std::runtime_error(
             "retry-shadow mode requires --retry-betas");
+    }
+    if (isApproxActiveMode(options.mode) &&
+        (!std::isfinite(options.approx_beta) ||
+         options.approx_beta < 1.0)) {
+        throw std::runtime_error(
+            "active approximate modes require --approx-beta >= 1");
+    }
+    if (!isApproxActiveMode(options.mode) &&
+        options.approx_beta != 0.0) {
+        throw std::runtime_error(
+            "--approx-beta is only valid for active approximate modes");
     }
     return options;
 }
@@ -582,7 +639,7 @@ std::set<hnswlib::labeltype> labelsFromQueue(Queue queue) {
 }
 
 template<typename Queue>
-double recallAtK(
+size_t groundTruthHitsAtK(
     const Queue& result,
     const uint32_t* ground_truth,
     size_t k) {
@@ -596,8 +653,34 @@ double recallAtK(
             ++matches;
         }
     }
-    return static_cast<double>(matches) /
+    return matches;
+}
+
+template<typename Queue>
+double recallAtK(
+    const Queue& result,
+    const uint32_t* ground_truth,
+    size_t k) {
+    return static_cast<double>(
+        groundTruthHitsAtK(result, ground_truth, k)) /
         static_cast<double>(k);
+}
+
+template<typename LeftQueue, typename RightQueue>
+size_t resultOverlapAtK(
+    const LeftQueue& left,
+    const RightQueue& right) {
+    const std::set<hnswlib::labeltype> left_labels =
+        labelsFromQueue(left);
+    const std::set<hnswlib::labeltype> right_labels =
+        labelsFromQueue(right);
+    size_t overlap = 0U;
+    for (std::set<hnswlib::labeltype>::const_iterator it =
+             left_labels.begin();
+         it != left_labels.end(); ++it) {
+        overlap += right_labels.count(*it);
+    }
+    return overlap;
 }
 
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
@@ -858,6 +941,22 @@ void addMetrics(
     totals.edge_scans += metrics.edge_scans;
     totals.duplicate_encounters +=
         metrics.duplicate_encounters;
+    totals.approx_eligible_first_visits +=
+        metrics.approx_eligible_first_visits;
+    totals.approx_first_pruned += metrics.approx_first_pruned;
+    totals.approx_retry_encountered +=
+        metrics.approx_retry_encountered;
+    totals.approx_retry_exact_distance +=
+        metrics.approx_retry_exact_distance;
+    totals.approx_retry_inserted_candidate +=
+        metrics.approx_retry_inserted_candidate;
+    totals.approx_retry_inserted_result +=
+        metrics.approx_retry_inserted_result;
+    totals.approx_estimator_fallback +=
+        metrics.approx_estimator_fallback;
+    totals.approx_state_bytes_max = std::max(
+        totals.approx_state_bytes_max,
+        metrics.approx_state_bytes);
 }
 
 void writeMetadata(
@@ -878,6 +977,8 @@ void writeMetadata(
         << "  \"enabled_methods\": "
         << (options.mode == "retry-shadow" ?
                 "[\"current\",\"hypothetical_retry_shadow\"],\n" :
+            isApproxActiveMode(options.mode) ?
+                "[\"baseline\",\"active_raw_margin\"],\n" :
                 "[\"current\"],\n")
         << "  \"validation_tolerance\": 0.0,\n"
         << "  \"retry_shadow_schema_version\": "
@@ -914,12 +1015,25 @@ void writeMetadata(
         << "  \"sidecar_bytes\": " << fileSize(options.sidecar_path)
         << ",\n"
         << "  \"real_pruning_enabled\": "
-        << (options.mode == "prune" ? "true" : "false")
+        << ((options.mode == "prune" ||
+             isApproxActiveMode(options.mode)) ?
+                "true" : "false")
         << ",\n"
         << "  \"bound_pruned_semantics\": "
         << (options.mode == "prune" ?
                 "\"actual_prune\",\n" :
+            isApproxActiveMode(options.mode) ?
+                "\"strict_bound_observe_only; see approx_first_pruned\",\n" :
                 "\"would_prune_observe_only\",\n")
+        << "  \"approx_active\": "
+        << (isApproxActiveMode(options.mode) ? "true" : "false")
+        << ",\n"
+        << "  \"approx_beta\": "
+        << std::setprecision(17) << options.approx_beta << ",\n"
+        << "  \"approx_retry_enabled\": "
+        << (options.mode == "approx-retry" ? "true" : "false")
+        << ",\n"
+        << "  \"raw_fast_path\": false,\n"
         << "  \"shadow_sample_modulus\": "
         << options.shadow_sample_modulus << ",\n"
         << "  \"shadow_sample_remainder\": "
@@ -943,9 +1057,14 @@ void writeMetadata(
         << "  \"approx_shadow_compiled\": false,\n"
 #endif
 #ifdef HNSWLIB_ENABLE_V0_REAL_PRUNING
-        << "  \"real_pruning_compiled\": true\n"
+        << "  \"real_pruning_compiled\": true,\n"
 #else
-        << "  \"real_pruning_compiled\": false\n"
+        << "  \"real_pruning_compiled\": false,\n"
+#endif
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+        << "  \"approx_real_pruning_compiled\": true\n"
+#else
+        << "  \"approx_real_pruning_compiled\": false\n"
 #endif
         << "}\n";
 }
@@ -953,13 +1072,30 @@ void writeMetadata(
 bool writeSummary(
     const Options& options,
     const Totals& totals) {
+    const bool approx_active = isApproxActiveMode(options.mode);
+    const bool approx_invariants =
+        !approx_active ||
+        (totals.approx_eligible_first_visits > 0U &&
+         totals.approx_retry_encountered ==
+             totals.approx_retry_exact_distance &&
+         totals.approx_retry_exact_distance <=
+             totals.approx_first_pruned &&
+         totals.exact_distance_saved ==
+             totals.approx_first_pruned -
+                totals.approx_retry_exact_distance &&
+         totals.approx_retry_inserted_candidate <=
+             totals.approx_retry_exact_distance &&
+         totals.approx_retry_inserted_result <=
+             totals.approx_retry_inserted_candidate &&
+         (options.mode != "approx-no-retry" ||
+          totals.approx_retry_exact_distance == 0U));
     const bool valid =
-        totals.mismatch_queries == 0 &&
+        (approx_active || totals.mismatch_queries == 0) &&
         totals.lower_bound_violation == 0 &&
         totals.false_prune == 0 &&
         totals.raw_prunable <= totals.bound_evaluated &&
         totals.oracle_prunable <= totals.bound_evaluated &&
-        (options.mode == "prune" ||
+        (options.mode == "prune" || approx_active ||
             totals.exact_distance_saved == 0) &&
         (options.mode != "prune" ||
             totals.bound_pruned ==
@@ -973,10 +1109,17 @@ bool writeSummary(
                     static_cast<uint64_t>(
                         options.retry_betas.size()) &&
              totals.retry_candidate_records_written <=
-                 totals.retry_candidate_records_seen));
+                 totals.retry_candidate_records_seen)) &&
+        approx_invariants;
     const double divisor =
         totals.query_count == 0 ?
             1.0 : static_cast<double>(totals.query_count);
+    const double baseline_dco = static_cast<double>(
+        totals.baseline_exact_distance_computed);
+    const double dco_reduction = baseline_dco > 0.0 ?
+        (baseline_dco -
+         static_cast<double>(totals.exact_distance_computed)) /
+            baseline_dco : 0.0;
     std::ofstream out(
         (options.output_dir + "/summary.json").c_str());
     if (!out) throw std::runtime_error("Cannot create summary.json");
@@ -995,6 +1138,15 @@ bool writeSummary(
         << totals.baseline_recall_sum / divisor << ",\n"
         << "  \"mean_v0_recall_at_k\": "
         << totals.v0_recall_sum / divisor << ",\n"
+        << "  \"mean_recall_loss\": "
+        << totals.recall_loss_sum / divisor << ",\n"
+        << "  \"recall_loss_queries\": "
+        << totals.recall_loss_queries << ",\n"
+        << "  \"catastrophic_recall_loss_queries\": "
+        << totals.catastrophic_recall_loss_queries << ",\n"
+        << "  \"mean_result_overlap_at_k\": "
+        << static_cast<double>(totals.result_overlap_sum) /
+            divisor << ",\n"
         << "  \"baseline_latency_ns\": "
         << totals.baseline_latency_ns << ",\n"
         << "  \"v0_latency_ns\": " << totals.v0_latency_ns << ",\n"
@@ -1012,6 +1164,10 @@ bool writeSummary(
         << "  \"false_prune\": " << totals.false_prune << ",\n"
         << "  \"exact_distance_computed\": "
         << totals.exact_distance_computed << ",\n"
+        << "  \"baseline_exact_distance_computed\": "
+        << totals.baseline_exact_distance_computed << ",\n"
+        << "  \"baseline_relative_exact_dco_reduction\": "
+        << dco_reduction << ",\n"
         << "  \"expanded_nodes\": "
         << totals.expanded_nodes << ",\n"
         << "  \"edge_scans\": " << totals.edge_scans << ",\n"
@@ -1026,7 +1182,27 @@ bool writeSummary(
         << "  \"retry_candidate_records_written\": "
         << totals.retry_candidate_records_written << ",\n"
         << "  \"retry_query_summary_rows\": "
-        << totals.retry_query_summary_rows << "\n"
+        << totals.retry_query_summary_rows << ",\n"
+        << "  \"approx_beta\": " << options.approx_beta << ",\n"
+        << "  \"approx_retry_enabled\": "
+        << (options.mode == "approx-retry" ? "true" : "false")
+        << ",\n"
+        << "  \"approx_eligible_first_visits\": "
+        << totals.approx_eligible_first_visits << ",\n"
+        << "  \"approx_first_pruned\": "
+        << totals.approx_first_pruned << ",\n"
+        << "  \"approx_retry_encountered\": "
+        << totals.approx_retry_encountered << ",\n"
+        << "  \"approx_retry_exact_distance\": "
+        << totals.approx_retry_exact_distance << ",\n"
+        << "  \"approx_retry_inserted_candidate\": "
+        << totals.approx_retry_inserted_candidate << ",\n"
+        << "  \"approx_retry_inserted_result\": "
+        << totals.approx_retry_inserted_result << ",\n"
+        << "  \"approx_estimator_fallback\": "
+        << totals.approx_estimator_fallback << ",\n"
+        << "  \"approx_state_bytes_max\": "
+        << totals.approx_state_bytes_max << "\n"
         << "}\n";
     return valid;
 }
@@ -1100,7 +1276,16 @@ void run(const Options& options) {
         << "exact_only_fallback,exact_distance_saved,"
         << "lower_bound_violation,false_prune,"
         << "exact_distance_computed,expanded_nodes,edge_scans,"
-        << "duplicate_encounters\n";
+        << "duplicate_encounters,baseline_ground_truth_hits,"
+        << "v0_ground_truth_hits,ground_truth_hits_lost,"
+        << "result_overlap_at_k,recall_loss,"
+        << "baseline_exact_distance_computed,"
+        << "baseline_relative_exact_dco_reduction,"
+        << "approx_eligible_first_visits,approx_first_pruned,"
+        << "approx_retry_encountered,approx_retry_exact_distance,"
+        << "approx_retry_inserted_candidate,"
+        << "approx_retry_inserted_result,"
+        << "approx_estimator_fallback,approx_state_bytes\n";
 
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
     std::unique_ptr<CsvShadowCollector> shadow_collector;
@@ -1155,11 +1340,47 @@ void run(const Options& options) {
         const std::chrono::steady_clock::time_point baseline_end =
             std::chrono::steady_clock::now();
 
+        hnswlib::V0QueryMetrics baseline_metrics;
+        if (isApproxActiveMode(options.mode) ||
+            options.mode == "prune") {
+            const std::priority_queue<
+                std::pair<float, hnswlib::labeltype> >
+                instrumented_baseline = index.searchKnnV0(
+                    query,
+                    options.k,
+                    &baseline_metrics,
+                    nullptr
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+                    , nullptr
+                    , query_id
+#endif
+                );
+            if (!queuesExactlyEqual(
+                    baseline, instrumented_baseline)) {
+                throw std::runtime_error(
+                    "instrumented baseline differs from searchKnn");
+            }
+        }
+
         hnswlib::V0QueryMetrics metrics;
         const std::chrono::steady_clock::time_point v0_start =
             std::chrono::steady_clock::now();
         std::priority_queue<
             std::pair<float, hnswlib::labeltype> > v0;
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+        if (isApproxActiveMode(options.mode)) {
+            hnswlib::V0ApproxPruningConfig config;
+            config.beta = options.approx_beta;
+            config.retry_enabled =
+                options.mode == "approx-retry";
+            v0 = index.searchKnnV0Approx(
+                query,
+                options.k,
+                config,
+                &metrics,
+                nullptr);
+        } else
+#endif
 #ifdef HNSWLIB_ENABLE_V0_REAL_PRUNING
         if (options.mode == "prune") {
             v0 = index.searchKnnV0Pruned(
@@ -1197,6 +1418,24 @@ void run(const Options& options) {
             recallAtK(baseline, query_truth, options.k);
         const double v0_recall =
             recallAtK(v0, query_truth, options.k);
+        const size_t baseline_hits = groundTruthHitsAtK(
+            baseline, query_truth, options.k);
+        const size_t v0_hits = groundTruthHitsAtK(
+            v0, query_truth, options.k);
+        const int64_t hits_lost =
+            static_cast<int64_t>(baseline_hits) -
+            static_cast<int64_t>(v0_hits);
+        const size_t result_overlap = resultOverlapAtK(
+            baseline, v0);
+        const double recall_loss =
+            baseline_recall - v0_recall;
+        const double query_dco_reduction =
+            baseline_metrics.exact_distance_computed > 0U ?
+            (static_cast<double>(
+                 baseline_metrics.exact_distance_computed) -
+             static_cast<double>(metrics.exact_distance_computed)) /
+                static_cast<double>(
+                    baseline_metrics.exact_distance_computed) : 0.0;
 
         ++totals.query_count;
         totals.mismatch_queries += equal ? 0U : 1U;
@@ -1204,6 +1443,15 @@ void run(const Options& options) {
         totals.v0_latency_ns += v0_ns;
         totals.baseline_recall_sum += baseline_recall;
         totals.v0_recall_sum += v0_recall;
+        totals.recall_loss_sum += recall_loss;
+        totals.result_overlap_sum +=
+            static_cast<uint64_t>(result_overlap);
+        totals.recall_loss_queries +=
+            recall_loss > 0.0 ? 1U : 0U;
+        totals.catastrophic_recall_loss_queries +=
+            recall_loss >= 0.2 - 1e-12 ? 1U : 0U;
+        totals.baseline_exact_distance_computed +=
+            baseline_metrics.exact_distance_computed;
         addMetrics(totals, metrics);
 
         query_out
@@ -1225,7 +1473,22 @@ void run(const Options& options) {
             << metrics.exact_distance_computed << ','
             << metrics.expanded_nodes << ','
             << metrics.edge_scans << ','
-            << metrics.duplicate_encounters << '\n';
+            << metrics.duplicate_encounters << ','
+            << baseline_hits << ','
+            << v0_hits << ','
+            << hits_lost << ','
+            << result_overlap << ','
+            << recall_loss << ','
+            << baseline_metrics.exact_distance_computed << ','
+            << query_dco_reduction << ','
+            << metrics.approx_eligible_first_visits << ','
+            << metrics.approx_first_pruned << ','
+            << metrics.approx_retry_encountered << ','
+            << metrics.approx_retry_exact_distance << ','
+            << metrics.approx_retry_inserted_candidate << ','
+            << metrics.approx_retry_inserted_result << ','
+            << metrics.approx_estimator_fallback << ','
+            << metrics.approx_state_bytes << '\n';
         if (!query_out) {
             throw std::runtime_error(
                 "Cannot write query_metrics.csv");
@@ -1278,6 +1541,15 @@ void run(const Options& options) {
         << " lower_bound_violation="
         << totals.lower_bound_violation
         << " false_prune=" << totals.false_prune
+        << " approx_first_pruned="
+        << totals.approx_first_pruned
+        << " approx_retry_exact="
+        << totals.approx_retry_exact_distance
+        << " mean_recall_loss="
+        << std::setprecision(6)
+        << (totals.query_count == 0U ? 0.0 :
+            totals.recall_loss_sum /
+                static_cast<double>(totals.query_count))
         << std::endl;
 }
 

@@ -18,7 +18,15 @@ bool metricsAreZero(const hnswlib::V0QueryMetrics& metrics) {
         metrics.exact_distance_computed == 0 &&
         metrics.expanded_nodes == 0 &&
         metrics.edge_scans == 0 &&
-        metrics.duplicate_encounters == 0;
+        metrics.duplicate_encounters == 0 &&
+        metrics.approx_eligible_first_visits == 0 &&
+        metrics.approx_first_pruned == 0 &&
+        metrics.approx_retry_encountered == 0 &&
+        metrics.approx_retry_exact_distance == 0 &&
+        metrics.approx_retry_inserted_candidate == 0 &&
+        metrics.approx_retry_inserted_result == 0 &&
+        metrics.approx_estimator_fallback == 0 &&
+        metrics.approx_state_bytes == 0;
 }
 
 template<typename Callable>

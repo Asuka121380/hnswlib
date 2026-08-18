@@ -504,6 +504,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         , const EdgeQuantV0QueryContext* v0_query = nullptr
         , V0QueryMetrics* v0_metrics = nullptr
         , bool v0_enable_real_pruning = false
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+        , const V0ApproxPruningConfig* v0_approx_config = nullptr
+#endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
         , V0ShadowValidationCollector* v0_shadow = nullptr
         , uint64_t v0_query_id = 0U
@@ -516,10 +519,25 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             throw std::invalid_argument(
                 "V0 search requires query context and metrics");
         }
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+        if (v0_approx_config != nullptr &&
+            (!use_edge_quant_v0 || !v0_approx_config->valid())) {
+            throw std::invalid_argument(
+                "Invalid V0 approximate-pruning configuration");
+        }
+#endif
 #endif
         VisitedList *vl = visited_list_pool_->getFreeVisitedList();
         vl_type *visited_array = vl->mass;
         vl_type visited_array_tag = vl->curV;
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+        std::vector<uint8_t> v0_approx_pruned;
+        if (v0_approx_config != nullptr) {
+            v0_approx_pruned.assign(max_elements_, 0U);
+            v0_metrics->approx_state_bytes =
+                static_cast<uint64_t>(v0_approx_pruned.size());
+        }
+#endif
 #ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
         uint64_t v0_expansion_index = 0U;
 #endif
@@ -627,14 +645,85 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 _mm_prefetch(data_level0_memory_ + (*(data + j + 1)) * size_data_per_element_ + offsetData_,
                                 _MM_HINT_T0);  ////////////
 #endif
-                if (!(visited_array[candidate_id] == visited_array_tag)) {
+                const bool v0_candidate_exact_visited =
+                    visited_array[candidate_id] == visited_array_tag;
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+                bool v0_candidate_is_retry = false;
+                if (!v0_candidate_exact_visited &&
+                    v0_approx_config != nullptr &&
+                    v0_approx_pruned[candidate_id] != 0U) {
+                    v0_candidate_is_retry = true;
                     visited_array[candidate_id] = visited_array_tag;
+                    ++v0_metrics->approx_retry_encountered;
+                    ++v0_metrics->approx_retry_exact_distance;
+                    if (v0_metrics->exact_distance_saved == 0U) {
+                        throw std::logic_error(
+                            "V0 retry has no matching first prune");
+                    }
+                    --v0_metrics->exact_distance_saved;
+                }
+#endif
+                if (!v0_candidate_exact_visited) {
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+                    if (v0_approx_config != nullptr &&
+                        !v0_candidate_is_retry) {
+                        if (top_candidates.size() < ef) {
+                            ++v0_metrics->exact_fallback;
+                            ++v0_metrics->approx_estimator_fallback;
+                        } else {
+                            const V0RawEstimateResult raw =
+                                v0_query->evaluateRaw(
+                                    getEdgeQuantV0Record(
+                                        current_node_id, j - 1U),
+                                    static_cast<double>(candidate_dist));
+                            if (raw.valid()) {
+                                ++v0_metrics->approx_eligible_first_visits;
+                                const double scaled_threshold =
+                                    v0_approx_config->beta *
+                                    static_cast<double>(lowerBound);
+                                if (std::isfinite(scaled_threshold) &&
+                                    raw.approximate_squared_distance >
+                                        scaled_threshold) {
+                                    ++v0_metrics->approx_first_pruned;
+                                    ++v0_metrics->exact_distance_saved;
+                                    if (v0_approx_config->retry_enabled) {
+                                        v0_approx_pruned[candidate_id] = 1U;
+                                    } else {
+                                        visited_array[candidate_id] =
+                                            visited_array_tag;
+                                    }
+                                    continue;
+                                }
+                            } else if (
+                                raw.status == V0BoundStatus::ExactOnly ||
+                                raw.status == V0BoundStatus::ZeroLength) {
+                                ++v0_metrics->exact_only_fallback;
+                                ++v0_metrics->approx_estimator_fallback;
+                            } else {
+                                ++v0_metrics->exact_fallback;
+                                ++v0_metrics->approx_estimator_fallback;
+                            }
+                        }
+                        visited_array[candidate_id] = visited_array_tag;
+                    }
+#endif
+#ifndef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+                    visited_array[candidate_id] = visited_array_tag;
+#else
+                    if (v0_approx_config == nullptr) {
+                        visited_array[candidate_id] = visited_array_tag;
+                    }
+#endif
 
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
                     V0BoundResult v0_bound;
                     bool v0_bound_attempted = false;
                     bool v0_would_prune = false;
-                    if (use_edge_quant_v0) {
+                    if (use_edge_quant_v0
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+                        && v0_approx_config == nullptr
+#endif
+                        ) {
                         // Until the exact result heap is full, lowerBound is
                         // not a rejection threshold. Milestone 9 records an
                         // exact fallback and preserves the original path.
@@ -828,6 +917,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
                     if (flag_consider_candidate) {
                         candidate_set.emplace(-dist, candidate_id);
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+                        if (v0_candidate_is_retry) {
+                            ++v0_metrics->approx_retry_inserted_candidate;
+                        }
+#endif
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
                         if (trace != nullptr) {
                             trace_record.inserted_candidate_queue = true;
@@ -843,6 +937,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         if (bare_bone_search || 
                             (!isMarkedDeleted(candidate_id) && ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(candidate_id))))) {
                             top_candidates.emplace(dist, candidate_id);
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+                            if (v0_candidate_is_retry) {
+                                ++v0_metrics->approx_retry_inserted_result;
+                            }
+#endif
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
                             if (trace != nullptr) {
                                 trace_record.inserted_result_queue = true;
@@ -1782,6 +1881,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         , const EdgeQuantV0QueryContext* v0_query = nullptr
         , V0QueryMetrics* v0_metrics = nullptr
         , bool v0_enable_real_pruning = false
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+        , const V0ApproxPruningConfig* v0_approx_config = nullptr
+#endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
         , V0ShadowValidationCollector* v0_shadow = nullptr
         , uint64_t v0_query_id = 0U
@@ -1857,6 +1959,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     currObj, query_data, std::max(ef_, k), isIdAllowed, nullptr, trace
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
                     , v0_query, v0_metrics, v0_enable_real_pruning
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+                    , v0_approx_config
+#endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
 #endif
@@ -1867,6 +1972,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     currObj, query_data, std::max(ef_, k), isIdAllowed
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
                     , nullptr, v0_query, v0_metrics, v0_enable_real_pruning
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+                    , v0_approx_config
+#endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
 #endif
@@ -1879,6 +1987,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     currObj, query_data, std::max(ef_, k), isIdAllowed, nullptr, trace
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
                     , v0_query, v0_metrics, v0_enable_real_pruning
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+                    , v0_approx_config
+#endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
 #endif
@@ -1889,6 +2000,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     currObj, query_data, std::max(ef_, k), isIdAllowed
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
                     , nullptr, v0_query, v0_metrics, v0_enable_real_pruning
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+                    , v0_approx_config
+#endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
 #endif
@@ -1984,6 +2098,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             , &query_context
             , active_metrics
             , false
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+            , nullptr
+#endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
             , shadow
             , query_id
@@ -2024,6 +2141,54 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             , &query_context
             , active_metrics
             , true
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+            , nullptr
+#endif
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+            , nullptr
+            , 0U
+#endif
+#endif
+        );
+    }
+#endif
+
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+    std::priority_queue<std::pair<dist_t, labeltype > >
+    searchKnnV0Approx(
+        const void *query_data,
+        size_t k,
+        const V0ApproxPruningConfig& config,
+        V0QueryMetrics* metrics = nullptr,
+        BaseFilterFunctor* isIdAllowed = nullptr) const {
+        V0QueryMetrics local_metrics;
+        V0QueryMetrics* active_metrics =
+            metrics != nullptr ? metrics : &local_metrics;
+        active_metrics->reset();
+        if (!config.valid()) {
+            throw std::invalid_argument(
+                "V0 approximate beta must be finite and >= 1");
+        }
+        if (isIdAllowed != nullptr || num_deleted_ != 0U) {
+            throw std::invalid_argument(
+                "V0 approximate pruning does not yet support filters or deleted elements");
+        }
+        requireUsableEdgeQuantV0Metadata();
+        const EdgeQuantV0QueryContext query_context(
+            static_cast<const float*>(query_data),
+            getEdgeQuantV0Metadata().view());
+        return searchKnnInternal<true>(
+            query_data,
+            k,
+            nullptr
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+            , nullptr
+#endif
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+            , &query_context
+            , active_metrics
+            , false
+            , &config
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
             , nullptr
             , 0U

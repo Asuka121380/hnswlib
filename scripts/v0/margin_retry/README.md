@@ -56,3 +56,44 @@ python scripts/v0/margin_retry/analyze_retry_shadow.py `
   --stage1-candidates results/v0_margin_retry/<run_id>/stage1/candidate_operating_points.json `
   --output-dir results/v0_margin_retry/<run_id>/stage2
 ```
+
+## Unified Stage 3–5 active Recall/DCO experiment
+
+Stage 3–5 is implemented as one correctness/metrics experiment with three internal checkpoints: raw-estimator parity, active retry state-machine correctness, and fixed-`efSearch` Recall/DCO validation. The initial `evaluateRaw()` intentionally reuses the strict evaluator (`raw_fast_path=false`); performance optimization remains deferred.
+
+The frozen raw formula and fail-closed contract are documented in `RAW_ESTIMATOR_FORMULA.md`.
+
+Build all active and regression modes:
+
+```powershell
+cmake -S . -B build-v0-margin-retry-active -G Ninja `
+  -DCMAKE_BUILD_TYPE=Release `
+  -DHNSWLIB_ENABLE_EDGE_QUANT_V0=ON `
+  -DHNSWLIB_ENABLE_V0_SHADOW_VALIDATION=ON `
+  -DHNSWLIB_ENABLE_V0_APPROX_SHADOW=ON `
+  -DHNSWLIB_ENABLE_V0_REAL_PRUNING=ON `
+  -DHNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING=ON
+```
+
+The active runner accepts one frozen beta per invocation:
+
+```powershell
+v0_search_runner --mode approx-no-retry --approx-beta 1.40 <common arguments>
+v0_search_runner --mode approx-retry    --approx-beta 1.40 <common arguments>
+```
+
+Repeat both modes for `beta={1.40,1.45,1.55}`. Beta 1.40 retains its Stage 1 fail provenance but is deliberately included because offline/shadow local false-prune labels cannot determine final ground-truth Recall.
+
+`query_metrics.csv` records per-query ground-truth hits, Recall loss, result overlap, baseline/active exact DCOs, first prunes, retry repayment, retry insertion, and state memory. `summary.json` reports fixed-budget pooled Recall and baseline-relative DCO reduction. These builds are not valid latency/QPS benchmarks.
+
+Aggregate paired runs:
+
+```powershell
+python scripts/v0/margin_retry/analyze_active_experiment.py `
+  --run-dir <ef200/approx-no-retry-beta1.40> `
+  --run-dir <ef200/approx-retry-beta1.40> `
+  --run-dir <additional paired runs> `
+  --output-dir <stage3_5/analysis>
+```
+
+On the cluster, `run_stage3_5_active_experiment.slurm` builds, checks Phase A/B, runs strict V0 plus paired retry-off/on active modes, and aggregates Phase C. Defaults are q100, `efSearch=200`, and all three frozen betas. Override `QUERY_COUNT=1000` and `EF_VALUES=50,100,200,400` for the formal matrix.
