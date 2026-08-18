@@ -17,6 +17,10 @@ struct V0QueryMetrics {
     uint64_t exact_distance_saved = 0;
     uint64_t lower_bound_violation = 0;
     uint64_t false_prune = 0;
+    uint64_t exact_distance_computed = 0;
+    uint64_t expanded_nodes = 0;
+    uint64_t edge_scans = 0;
+    uint64_t duplicate_encounters = 0;
 
     void reset() {
         *this = V0QueryMetrics();
@@ -30,6 +34,9 @@ struct V0ShadowRecord {
     uint64_t query_id = 0;
     uint64_t current_node_id = 0;
     uint64_t candidate_id = 0;
+    uint64_t expansion_index = 0;
+    uint64_t current_node_degree = 0;
+    uint64_t candidate_degree = 0;
     uint32_t graph_layer = 0;
     uint8_t bound_status = 0;
     double current_squared_distance = 0.0;
@@ -59,12 +66,35 @@ struct V0ShadowRecord {
     bool false_prune = false;
 };
 
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+struct V0ShadowExpansionRecord {
+    uint64_t query_id = 0;
+    uint64_t current_node_id = 0;
+    uint64_t expansion_index = 0;
+    uint64_t current_node_degree = 0;
+};
+
+struct V0ShadowDuplicateRecord {
+    uint64_t query_id = 0;
+    uint64_t current_node_id = 0;
+    uint64_t candidate_id = 0;
+    uint64_t expansion_index = 0;
+    uint64_t current_node_degree = 0;
+};
+#endif
+
 // Optional sink for detailed validation. Implementations decide whether to
 // stream, sample, or retain records; the search path owns no record storage.
 class V0ShadowValidationCollector {
  public:
     virtual ~V0ShadowValidationCollector() {}
     virtual void append(const V0ShadowRecord& record) = 0;
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+    virtual void beginQuery(uint64_t) {}
+    virtual void onExpansion(const V0ShadowExpansionRecord&) {}
+    virtual void onDuplicate(const V0ShadowDuplicateRecord&) {}
+    virtual void endQuery(uint64_t) {}
+#endif
 };
 #endif
 

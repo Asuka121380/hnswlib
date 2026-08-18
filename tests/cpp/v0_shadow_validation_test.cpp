@@ -37,8 +37,127 @@ class RecordingShadowCollector
         records.push_back(record);
     }
 
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+    void beginQuery(uint64_t) {
+        ++queries_started;
+    }
+
+    void onExpansion(
+        const hnswlib::V0ShadowExpansionRecord&) {
+        ++expansions;
+    }
+
+    void onDuplicate(
+        const hnswlib::V0ShadowDuplicateRecord&) {
+        ++duplicates;
+    }
+
+    void endQuery(uint64_t) {
+        ++queries_ended;
+    }
+#endif
+
     std::vector<hnswlib::V0ShadowRecord> records;
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+    uint64_t queries_started = 0;
+    uint64_t queries_ended = 0;
+    uint64_t expansions = 0;
+    uint64_t duplicates = 0;
+#endif
 };
+
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+class RecordingRetrySink :
+    public hnswlib::V0RetryShadowSink {
+ public:
+    void appendQuerySummary(
+        const hnswlib::V0RetryShadowQuerySummary& summary) {
+        summaries.push_back(summary);
+    }
+
+    void appendCandidate(
+        const hnswlib::V0RetryShadowCandidateRecord& record) {
+        candidates.push_back(record);
+    }
+
+    std::vector<hnswlib::V0RetryShadowQuerySummary> summaries;
+    std::vector<hnswlib::V0RetryShadowCandidateRecord> candidates;
+};
+
+void testHypotheticalRetryTracker() {
+    RecordingRetrySink sink;
+    std::vector<double> betas;
+    betas.push_back(1.45);
+    betas.push_back(1.55);
+    hnswlib::V0RetryShadowTracker tracker(betas, &sink);
+    tracker.beginQuery(7U);
+
+    hnswlib::V0ShadowExpansionRecord expansion;
+    expansion.query_id = 7U;
+    expansion.expansion_index = 4U;
+    tracker.onExpansion(expansion);
+
+    hnswlib::V0ShadowRecord false_pruned;
+    false_pruned.query_id = 7U;
+    false_pruned.current_node_id = 1U;
+    false_pruned.candidate_id = 10U;
+    false_pruned.expansion_index = 0U;
+    false_pruned.current_node_degree = 8U;
+    false_pruned.candidate_degree = 9U;
+    false_pruned.threshold = 100.0;
+    false_pruned.approximate_squared_distance = 160.0;
+    false_pruned.shadow_exact_squared_distance = 90.0;
+    false_pruned.lower_bound_valid = true;
+    tracker.append(false_pruned);
+
+    hnswlib::V0ShadowRecord true_pruned = false_pruned;
+    true_pruned.current_node_id = 2U;
+    true_pruned.candidate_id = 11U;
+    true_pruned.approximate_squared_distance = 150.0;
+    true_pruned.shadow_exact_squared_distance = 120.0;
+    tracker.append(true_pruned);
+
+    hnswlib::V0ShadowDuplicateRecord duplicate;
+    duplicate.query_id = 7U;
+    duplicate.current_node_id = 3U;
+    duplicate.candidate_id = 10U;
+    duplicate.expansion_index = 3U;
+    tracker.onDuplicate(duplicate);
+    duplicate.current_node_id = 4U;
+    duplicate.expansion_index = 4U;
+    tracker.onDuplicate(duplicate);
+    duplicate.candidate_id = 99U;
+    tracker.onDuplicate(duplicate);
+    tracker.endQuery(7U);
+
+    v0_test::require(
+        sink.summaries.size() == 2U,
+        "retry tracker did not emit one summary per beta");
+    v0_test::require(
+        sink.candidates.size() == 3U,
+        "retry tracker emitted unexpected candidate count");
+    const hnswlib::V0RetryShadowQuerySummary& aggressive =
+        sink.summaries[0];
+    const hnswlib::V0RetryShadowQuerySummary& conservative =
+        sink.summaries[1];
+    v0_test::require(
+        aggressive.eligible_first_visits == 2U &&
+        aggressive.first_pruned == 2U &&
+        aggressive.first_false_pruned == 1U &&
+        aggressive.pruned_revisited == 1U &&
+        aggressive.false_pruned_revisited == 1U &&
+        aggressive.duplicate_encounters_after_prune == 2U &&
+        aggressive.expanded_nodes == 5U,
+        "aggressive retry summary is incorrect");
+    v0_test::require(
+        conservative.eligible_first_visits == 2U &&
+        conservative.first_pruned == 1U &&
+        conservative.first_false_pruned == 1U &&
+        conservative.pruned_revisited == 1U &&
+        conservative.false_pruned_revisited == 1U,
+        "conservative retry summary is incorrect");
+}
+#endif
 
 void writeExactDirectionSidecar(
     const std::string& path,
@@ -197,6 +316,13 @@ void testShadowSearchPreservesBaseline() {
             std::pair<float, hnswlib::labeltype> > baseline =
                 index.searchKnn(query, k);
 
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+        hnswlib::V0QueryMetrics control_metrics;
+        const std::priority_queue<
+            std::pair<float, hnswlib::labeltype> > control =
+                index.searchKnnV0(
+                    query, k, &control_metrics);
+#endif
         hnswlib::V0QueryMetrics metrics;
         const std::priority_queue<
             std::pair<float, hnswlib::labeltype> > shadow =
@@ -211,6 +337,26 @@ void testShadowSearchPreservesBaseline() {
         v0_test::require(
             sameQueue(baseline, shadow),
             "shadow-only V0 search changed baseline results");
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+        v0_test::require(
+            sameQueue(control, shadow),
+            "retry instrumentation changed V0 results");
+        v0_test::require(
+            control_metrics.bound_evaluated ==
+                metrics.bound_evaluated &&
+            control_metrics.exact_fallback ==
+                metrics.exact_fallback &&
+            control_metrics.exact_only_fallback ==
+                metrics.exact_only_fallback &&
+            control_metrics.exact_distance_computed ==
+                metrics.exact_distance_computed &&
+            control_metrics.expanded_nodes ==
+                metrics.expanded_nodes &&
+            control_metrics.edge_scans == metrics.edge_scans &&
+            control_metrics.duplicate_encounters ==
+                metrics.duplicate_encounters,
+            "retry instrumentation changed V0 path counters");
+#endif
         v0_test::require(
             metrics.exact_distance_saved == 0U,
             "Milestone 9 reported saved exact distances");
@@ -366,6 +512,15 @@ void testShadowSearchPreservesBaseline() {
     v0_test::require(
         total_oracle_prunable == recorded_oracle_prunable,
         "oracle-prunable full counter does not match shadow records");
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+    v0_test::require(
+        collector.queries_started == node_count &&
+        collector.queries_ended == collector.queries_started,
+        "approx shadow begin/end query callbacks are unbalanced");
+    v0_test::require(
+        collector.expansions > 0U && collector.duplicates > 0U,
+        "approx shadow did not observe expansions and duplicates");
+#endif
 }
 
 }  // namespace
@@ -378,6 +533,9 @@ int main() {
         << std::endl;
     return 2;
 #else
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+    testHypotheticalRetryTracker();
+#endif
     testShadowSearchPreservesBaseline();
     std::cout << "v0_shadow_validation_test_ok" << std::endl;
     return 0;

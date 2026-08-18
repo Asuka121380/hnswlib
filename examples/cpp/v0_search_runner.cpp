@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cerrno>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -27,6 +28,14 @@
 #include "hnswlib/hnswlib.h"
 
 namespace {
+
+uint32_t retryShadowSchemaVersion() {
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+    return hnswlib::V0_RETRY_SHADOW_SCHEMA_VERSION;
+#else
+    return 0U;
+#endif
+}
 
 struct DatasetConfig {
     std::string dataset;
@@ -57,6 +66,7 @@ struct Options {
     size_t ef_search = 200;
     size_t shadow_sample_modulus = 1024;
     size_t shadow_sample_remainder = 0;
+    std::vector<double> retry_betas;
 };
 
 struct Totals {
@@ -73,8 +83,15 @@ struct Totals {
     uint64_t exact_distance_saved = 0;
     uint64_t lower_bound_violation = 0;
     uint64_t false_prune = 0;
+    uint64_t exact_distance_computed = 0;
+    uint64_t expanded_nodes = 0;
+    uint64_t edge_scans = 0;
+    uint64_t duplicate_encounters = 0;
     uint64_t shadow_records_seen = 0;
     uint64_t shadow_records_written = 0;
+    uint64_t retry_candidate_records_seen = 0;
+    uint64_t retry_candidate_records_written = 0;
+    uint64_t retry_query_summary_rows = 0;
     double baseline_recall_sum = 0.0;
     double v0_recall_sum = 0.0;
 };
@@ -228,6 +245,46 @@ size_t parseSize(const char* value, const std::string& name) {
     }
 }
 
+std::string jsonDoubleArray(
+    const std::vector<double>& values) {
+    std::ostringstream out;
+    out << '[';
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i != 0U) out << ',';
+        out << std::setprecision(17) << values[i];
+    }
+    out << ']';
+    return out.str();
+}
+
+std::vector<double> parseBetas(
+    const char* value,
+    const std::string& name) {
+    std::vector<double> betas;
+    std::istringstream parts(value);
+    std::string part;
+    while (std::getline(parts, part, ',')) {
+        if (part.empty()) {
+            throw std::runtime_error(
+                "Empty beta in " + name);
+        }
+        size_t consumed = 0U;
+        const double beta = std::stod(part, &consumed);
+        if (consumed != part.size() ||
+            !std::isfinite(beta) || beta < 1.0) {
+            throw std::runtime_error(
+                "Invalid beta in " + name + ": " + part);
+        }
+        betas.push_back(beta);
+    }
+    std::sort(betas.begin(), betas.end());
+    betas.erase(std::unique(betas.begin(), betas.end()), betas.end());
+    if (betas.empty()) {
+        throw std::runtime_error(name + " must not be empty");
+    }
+    return betas;
+}
+
 void printUsage(std::ostream& out) {
     out
         << "Usage: v0_search_runner\n"
@@ -235,7 +292,7 @@ void printUsage(std::ostream& out) {
         << "  --index-path <hnsw-index>\n"
         << "  --sidecar-path <v0meta>\n"
         << "  --output-dir <directory>\n"
-        << "  --mode <correctness|shadow|prune>\n"
+        << "  --mode <correctness|shadow|retry-shadow|prune>\n"
         << "  [--run-id <text>]\n"
         << "  [--query-start <non-negative-integer>]\n"
         << "  [--query-count <non-negative-integer; 0 means remaining>]\n"
@@ -243,6 +300,7 @@ void printUsage(std::ostream& out) {
         << "  [--ef-search <positive-integer>]\n"
         << "  [--shadow-sample-modulus <positive-integer>]\n"
         << "  [--shadow-sample-remainder <non-negative-integer>]\n"
+        << "  [--retry-betas <comma-separated squared-distance scales>]\n"
         << "  [--producer-git-commit <text>]\n"
         << "  [--git-branch <text>]\n"
         << "  [--working-tree-dirty <true|false|unknown>]\n";
@@ -278,6 +336,8 @@ Options parseOptions(int argc, char** argv) {
             options.shadow_sample_modulus = parseSize(value, key);
         } else if (key == "--shadow-sample-remainder") {
             options.shadow_sample_remainder = parseSize(value, key);
+        } else if (key == "--retry-betas") {
+            options.retry_betas = parseBetas(value, key);
         } else if (key == "--producer-git-commit") {
             options.producer_git_commit = value;
         } else if (key == "--git-branch") {
@@ -297,14 +357,21 @@ Options parseOptions(int argc, char** argv) {
     }
     if (options.mode != "correctness" &&
         options.mode != "shadow" &&
+        options.mode != "retry-shadow" &&
         options.mode != "prune") {
         throw std::runtime_error(
-            "--mode must be correctness, shadow, or prune");
+            "--mode must be correctness, shadow, retry-shadow, or prune");
     }
 #ifndef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
     if (options.mode == "shadow") {
         throw std::runtime_error(
             "shadow mode requires HNSWLIB_ENABLE_V0_SHADOW_VALIDATION=ON");
+    }
+#endif
+#ifndef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+    if (options.mode == "retry-shadow") {
+        throw std::runtime_error(
+            "retry-shadow mode requires HNSWLIB_ENABLE_V0_APPROX_SHADOW=ON");
     }
 #endif
 #ifndef HNSWLIB_ENABLE_V0_REAL_PRUNING
@@ -322,6 +389,11 @@ Options parseOptions(int argc, char** argv) {
         options.shadow_sample_modulus) {
         throw std::runtime_error(
             "shadow-sample-remainder must be less than the modulus");
+    }
+    if (options.mode == "retry-shadow" &&
+        options.retry_betas.empty()) {
+        throw std::runtime_error(
+            "retry-shadow mode requires --retry-betas");
     }
     return options;
 }
@@ -643,6 +715,129 @@ class CsvShadowCollector :
     size_t remainder_;
     Totals* totals_;
 };
+
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+class CsvRetryShadowSink :
+    public hnswlib::V0RetryShadowSink {
+ public:
+    CsvRetryShadowSink(
+        const std::string& query_path,
+        const std::string& candidate_path,
+        size_t modulus,
+        size_t remainder,
+        Totals* totals)
+        : query_output_(query_path.c_str()),
+          candidate_output_(candidate_path.c_str()),
+          modulus_(modulus),
+          remainder_(remainder),
+          totals_(totals) {
+        if (!query_output_ || !candidate_output_) {
+            throw std::runtime_error(
+                "Cannot create retry shadow CSV outputs");
+        }
+        query_output_
+            << "schema_version,query_id,beta,eligible_first_visits,"
+            << "first_pruned,first_false_pruned,pruned_revisited,"
+            << "false_pruned_revisited,unrevisited_first_pruned,"
+            << "unrevisited_false_pruned,"
+            << "duplicate_encounters_after_prune,expanded_nodes\n";
+        candidate_output_
+            << "schema_version,query_id,beta,candidate_id,"
+            << "first_parent_id,second_parent_id,"
+            << "first_expansion_index,second_expansion_index,"
+            << "revisit_delay_expansions,duplicate_encounters,"
+            << "first_parent_degree,candidate_degree,"
+            << "first_threshold,first_raw_estimate,"
+            << "first_exact_distance,first_false_prune,revisited\n";
+    }
+
+    void appendQuerySummary(
+        const hnswlib::V0RetryShadowQuerySummary& summary) {
+        const uint64_t unrevisited_pruned =
+            summary.first_pruned - summary.pruned_revisited;
+        const uint64_t unrevisited_false =
+            summary.first_false_pruned -
+            summary.false_pruned_revisited;
+        query_output_
+            << hnswlib::V0_RETRY_SHADOW_SCHEMA_VERSION << ','
+            << summary.query_id << ','
+            << std::setprecision(17) << summary.beta << ','
+            << summary.eligible_first_visits << ','
+            << summary.first_pruned << ','
+            << summary.first_false_pruned << ','
+            << summary.pruned_revisited << ','
+            << summary.false_pruned_revisited << ','
+            << unrevisited_pruned << ','
+            << unrevisited_false << ','
+            << summary.duplicate_encounters_after_prune << ','
+            << summary.expanded_nodes << '\n';
+        if (!query_output_) {
+            throw std::runtime_error(
+                "Cannot write retry_shadow_per_query_raw.csv");
+        }
+        ++totals_->retry_query_summary_rows;
+    }
+
+    void appendCandidate(
+        const hnswlib::V0RetryShadowCandidateRecord& record) {
+        ++totals_->retry_candidate_records_seen;
+        uint64_t key = mix64(record.query_id);
+        key ^= mix64(
+            record.candidate_id + 0x8cb92baa3f3d8dd7ULL);
+        key ^= mix64(static_cast<uint64_t>(
+            record.beta * 1000000.0));
+        const bool sampled =
+            key % static_cast<uint64_t>(modulus_) ==
+            static_cast<uint64_t>(remainder_);
+        if (!sampled) {
+            return;
+        }
+        const uint64_t revisit_delay = record.revisited ?
+            record.second_expansion_index -
+                record.first_expansion_index :
+            0U;
+        candidate_output_
+            << hnswlib::V0_RETRY_SHADOW_SCHEMA_VERSION << ','
+            << record.query_id << ','
+            << std::setprecision(17) << record.beta << ','
+            << record.candidate_id << ','
+            << record.first_parent_id << ','
+            << record.second_parent_id << ','
+            << record.first_expansion_index << ','
+            << record.second_expansion_index << ','
+            << revisit_delay << ','
+            << record.duplicate_encounters << ','
+            << record.first_parent_degree << ','
+            << record.candidate_degree << ','
+            << record.first_threshold << ','
+            << record.first_raw_estimate << ','
+            << record.first_exact_distance << ','
+            << (record.first_false_prune ? 1 : 0) << ','
+            << (record.revisited ? 1 : 0) << '\n';
+        if (!candidate_output_) {
+            throw std::runtime_error(
+                "Cannot write retry_shadow_records.csv");
+        }
+        ++totals_->retry_candidate_records_written;
+    }
+
+    void flush() {
+        query_output_.flush();
+        candidate_output_.flush();
+        if (!query_output_ || !candidate_output_) {
+            throw std::runtime_error(
+                "Cannot flush retry shadow CSV outputs");
+        }
+    }
+
+ private:
+    std::ofstream query_output_;
+    std::ofstream candidate_output_;
+    size_t modulus_;
+    size_t remainder_;
+    Totals* totals_;
+};
+#endif
 #endif
 
 void addMetrics(
@@ -657,6 +852,12 @@ void addMetrics(
     totals.exact_distance_saved += metrics.exact_distance_saved;
     totals.lower_bound_violation += metrics.lower_bound_violation;
     totals.false_prune += metrics.false_prune;
+    totals.exact_distance_computed +=
+        metrics.exact_distance_computed;
+    totals.expanded_nodes += metrics.expanded_nodes;
+    totals.edge_scans += metrics.edge_scans;
+    totals.duplicate_encounters +=
+        metrics.duplicate_encounters;
 }
 
 void writeMetadata(
@@ -674,8 +875,13 @@ void writeMetadata(
         << "  \"format\": \"hnswlib_v0_search_run\",\n"
         << "  \"format_version\": 2,\n"
         << "  \"shadow_schema_version\": 2,\n"
-        << "  \"enabled_methods\": [\"current\"],\n"
+        << "  \"enabled_methods\": "
+        << (options.mode == "retry-shadow" ?
+                "[\"current\",\"hypothetical_retry_shadow\"],\n" :
+                "[\"current\"],\n")
         << "  \"validation_tolerance\": 0.0,\n"
+        << "  \"retry_shadow_schema_version\": "
+        << retryShadowSchemaVersion() << ",\n"
         << "  \"dataset\": \"" << jsonEscape(dataset.dataset) << "\",\n"
         << "  \"mode\": \"" << jsonEscape(options.mode) << "\",\n"
         << "  \"run_id\": \"" << jsonEscape(options.run_id) << "\",\n"
@@ -718,6 +924,8 @@ void writeMetadata(
         << options.shadow_sample_modulus << ",\n"
         << "  \"shadow_sample_remainder\": "
         << options.shadow_sample_remainder << ",\n"
+        << "  \"retry_betas\": "
+        << jsonDoubleArray(options.retry_betas) << ",\n"
         << "  \"producer_git_commit\": \""
         << jsonEscape(options.producer_git_commit) << "\",\n"
         << "  \"git_branch\": \"" << jsonEscape(options.git_branch)
@@ -728,6 +936,11 @@ void writeMetadata(
         << "  \"shadow_validation_compiled\": true,\n"
 #else
         << "  \"shadow_validation_compiled\": false,\n"
+#endif
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+        << "  \"approx_shadow_compiled\": true,\n"
+#else
+        << "  \"approx_shadow_compiled\": false,\n"
 #endif
 #ifdef HNSWLIB_ENABLE_V0_REAL_PRUNING
         << "  \"real_pruning_compiled\": true\n"
@@ -751,7 +964,16 @@ bool writeSummary(
         (options.mode != "prune" ||
             totals.bound_pruned ==
                 totals.exact_distance_saved) &&
-        (options.mode != "shadow" || totals.bound_evaluated > 0);
+        ((options.mode != "shadow" &&
+          options.mode != "retry-shadow") ||
+            totals.bound_evaluated > 0) &&
+        (options.mode != "retry-shadow" ||
+            (totals.retry_query_summary_rows ==
+                 totals.query_count *
+                    static_cast<uint64_t>(
+                        options.retry_betas.size()) &&
+             totals.retry_candidate_records_written <=
+                 totals.retry_candidate_records_seen));
     const double divisor =
         totals.query_count == 0 ?
             1.0 : static_cast<double>(totals.query_count);
@@ -763,6 +985,8 @@ bool writeSummary(
         << "  \"format\": \"hnswlib_v0_search_summary\",\n"
         << "  \"format_version\": 2,\n"
         << "  \"shadow_schema_version\": 2,\n"
+        << "  \"retry_shadow_schema_version\": "
+        << retryShadowSchemaVersion() << ",\n"
         << "  \"status\": \"" << (valid ? "valid" : "invalid") << "\",\n"
         << "  \"query_count\": " << totals.query_count << ",\n"
         << "  \"mismatch_queries\": " << totals.mismatch_queries << ",\n"
@@ -786,10 +1010,23 @@ bool writeSummary(
         << "  \"lower_bound_violation\": "
         << totals.lower_bound_violation << ",\n"
         << "  \"false_prune\": " << totals.false_prune << ",\n"
+        << "  \"exact_distance_computed\": "
+        << totals.exact_distance_computed << ",\n"
+        << "  \"expanded_nodes\": "
+        << totals.expanded_nodes << ",\n"
+        << "  \"edge_scans\": " << totals.edge_scans << ",\n"
+        << "  \"duplicate_encounters\": "
+        << totals.duplicate_encounters << ",\n"
         << "  \"shadow_records_seen\": "
         << totals.shadow_records_seen << ",\n"
         << "  \"shadow_records_written\": "
-        << totals.shadow_records_written << "\n"
+        << totals.shadow_records_written << ",\n"
+        << "  \"retry_candidate_records_seen\": "
+        << totals.retry_candidate_records_seen << ",\n"
+        << "  \"retry_candidate_records_written\": "
+        << totals.retry_candidate_records_written << ",\n"
+        << "  \"retry_query_summary_rows\": "
+        << totals.retry_query_summary_rows << "\n"
         << "}\n";
     return valid;
 }
@@ -861,7 +1098,9 @@ void run(const Options& options) {
         << "bound_evaluated,bound_pruned,raw_prunable,"
         << "oracle_prunable,exact_fallback,"
         << "exact_only_fallback,exact_distance_saved,"
-        << "lower_bound_violation,false_prune\n";
+        << "lower_bound_violation,false_prune,"
+        << "exact_distance_computed,expanded_nodes,edge_scans,"
+        << "duplicate_encounters\n";
 
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
     std::unique_ptr<CsvShadowCollector> shadow_collector;
@@ -874,6 +1113,32 @@ void run(const Options& options) {
             options.shadow_sample_remainder,
             &totals));
     }
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+    std::unique_ptr<CsvRetryShadowSink> retry_sink;
+    std::unique_ptr<hnswlib::V0RetryShadowTracker>
+        retry_tracker;
+    if (options.mode == "retry-shadow") {
+        retry_sink.reset(new CsvRetryShadowSink(
+            options.output_dir +
+                "/retry_shadow_per_query_raw.csv",
+            options.output_dir +
+                "/retry_shadow_records.csv",
+            options.shadow_sample_modulus,
+            options.shadow_sample_remainder,
+            &totals));
+        retry_tracker.reset(
+            new hnswlib::V0RetryShadowTracker(
+                options.retry_betas,
+                retry_sink.get()));
+    }
+#endif
+    hnswlib::V0ShadowValidationCollector*
+        active_shadow_collector = shadow_collector.get();
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+    if (retry_tracker) {
+        active_shadow_collector = retry_tracker.get();
+    }
+#endif
 #endif
 
     for (size_t local = 0; local < count; ++local) {
@@ -911,7 +1176,7 @@ void run(const Options& options) {
                 &metrics,
                 nullptr
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
-                , shadow_collector.get()
+                , active_shadow_collector
                 , query_id
 #endif
             );
@@ -956,7 +1221,11 @@ void run(const Options& options) {
             << metrics.exact_only_fallback << ','
             << metrics.exact_distance_saved << ','
             << metrics.lower_bound_violation << ','
-            << metrics.false_prune << '\n';
+            << metrics.false_prune << ','
+            << metrics.exact_distance_computed << ','
+            << metrics.expanded_nodes << ','
+            << metrics.edge_scans << ','
+            << metrics.duplicate_encounters << '\n';
         if (!query_out) {
             throw std::runtime_error(
                 "Cannot write query_metrics.csv");
@@ -970,6 +1239,11 @@ void run(const Options& options) {
     if (shadow_collector) {
         shadow_collector->flush();
     }
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+    if (retry_sink) {
+        retry_sink->flush();
+    }
+#endif
 #endif
 
     writeMetadata(options, dataset, index, count);

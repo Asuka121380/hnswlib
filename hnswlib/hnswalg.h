@@ -19,6 +19,9 @@
 #include "edge_quant_v0_metadata.h"
 #include "edge_quant_v0_metrics.h"
 #include "edge_quant_v0_query_metadata.h"
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+#include "edge_quant_v0_retry_shadow.h"
+#endif
 #endif
 
 namespace hnswlib {
@@ -405,7 +408,6 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         VisitedList *vl = visited_list_pool_->getFreeVisitedList();
         vl_type *visited_array = vl->mass;
         vl_type visited_array_tag = vl->curV;
-
         std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
         std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> candidateSet;
 
@@ -518,6 +520,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         VisitedList *vl = visited_list_pool_->getFreeVisitedList();
         vl_type *visited_array = vl->mass;
         vl_type visited_array_tag = vl->curV;
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+        uint64_t v0_expansion_index = 0U;
+#endif
 
         std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
         std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> candidate_set;
@@ -576,6 +581,28 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
             int *data = (int *) get_linklist0(current_node_id);
             size_t size = getListCount((linklistsizeint*)data);
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+            if (use_edge_quant_v0) {
+                ++v0_metrics->expanded_nodes;
+                v0_metrics->edge_scans +=
+                    static_cast<uint64_t>(size);
+            }
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+            const uint64_t current_v0_expansion_index =
+                v0_expansion_index++;
+            if (use_edge_quant_v0 && v0_shadow != nullptr) {
+                V0ShadowExpansionRecord expansion_record;
+                expansion_record.query_id = v0_query_id;
+                expansion_record.current_node_id =
+                    static_cast<uint64_t>(current_node_id);
+                expansion_record.expansion_index =
+                    current_v0_expansion_index;
+                expansion_record.current_node_degree =
+                    static_cast<uint64_t>(size);
+                v0_shadow->onExpansion(expansion_record);
+            }
+#endif
+#endif
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
             if (trace != nullptr) trace->summary.n_edge_scan += size;
 #endif
@@ -680,6 +707,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
 
                     char *currObj1 = (getDataByInternalId(candidate_id));
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+                    if (use_edge_quant_v0) {
+                        ++v0_metrics->exact_distance_computed;
+                    }
+#endif
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
                     dist_t dist = trace != nullptr ? traceDistance(data_point, currObj1, trace) :
                         fstdistfunc_(data_point, currObj1, dist_func_param_);
@@ -721,6 +753,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                                 static_cast<uint64_t>(current_node_id);
                             record.candidate_id =
                                 static_cast<uint64_t>(candidate_id);
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+                            record.expansion_index =
+                                current_v0_expansion_index;
+                            record.current_node_degree =
+                                static_cast<uint64_t>(size);
+                            record.candidate_degree =
+                                static_cast<uint64_t>(getListCount(
+                                    (linklistsizeint*)get_linklist0(
+                                        candidate_id)));
+#endif
                             record.graph_layer = 0U;
                             record.bound_status =
                                 static_cast<uint8_t>(v0_bound.status);
@@ -865,6 +907,26 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 } else {
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
                     if (trace != nullptr) ++trace->summary.n_duplicate;
+#endif
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+                    if (use_edge_quant_v0) {
+                        ++v0_metrics->duplicate_encounters;
+                    }
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+                    if (use_edge_quant_v0 && v0_shadow != nullptr) {
+                        V0ShadowDuplicateRecord duplicate_record;
+                        duplicate_record.query_id = v0_query_id;
+                        duplicate_record.current_node_id =
+                            static_cast<uint64_t>(current_node_id);
+                        duplicate_record.candidate_id =
+                            static_cast<uint64_t>(candidate_id);
+                        duplicate_record.expansion_index =
+                            current_v0_expansion_index;
+                        duplicate_record.current_node_degree =
+                            static_cast<uint64_t>(size);
+                        v0_shadow->onDuplicate(duplicate_record);
+                    }
+#endif
 #endif
                 }
             }
@@ -1905,7 +1967,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         const EdgeQuantV0QueryContext query_context(
             static_cast<const float*>(query_data),
             getEdgeQuantV0Metadata().view());
-        return searchKnnInternal<true>(
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+        if (shadow != nullptr) {
+            shadow->beginQuery(query_id);
+        }
+#endif
+        std::priority_queue<std::pair<dist_t, labeltype > > result =
+            searchKnnInternal<true>(
             query_data,
             k,
             isIdAllowed
@@ -1922,6 +1990,12 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
 #endif
         );
+#ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
+        if (shadow != nullptr) {
+            shadow->endQuery(query_id);
+        }
+#endif
+        return result;
     }
 
 #ifdef HNSWLIB_ENABLE_V0_REAL_PRUNING

@@ -14,7 +14,11 @@ bool metricsAreZero(const hnswlib::V0QueryMetrics& metrics) {
         metrics.exact_only_fallback == 0 &&
         metrics.exact_distance_saved == 0 &&
         metrics.lower_bound_violation == 0 &&
-        metrics.false_prune == 0;
+        metrics.false_prune == 0 &&
+        metrics.exact_distance_computed == 0 &&
+        metrics.expanded_nodes == 0 &&
+        metrics.edge_scans == 0 &&
+        metrics.duplicate_encounters == 0;
 }
 
 template<typename Callable>

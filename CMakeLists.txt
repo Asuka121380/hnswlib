@@ -16,6 +16,7 @@ endif()
 
 option(HNSWLIB_ENABLE_EDGE_QUANT_V0 "Enable V0 conservative edge-quantised pruning support." OFF)
 option(HNSWLIB_ENABLE_V0_SHADOW_VALIDATION "Enable exact shadow validation for V0 pruning decisions." OFF)
+option(HNSWLIB_ENABLE_V0_APPROX_SHADOW "Enable hypothetical margin/retry shadow instrumentation." OFF)
 option(HNSWLIB_ENABLE_V0_REAL_PRUNING "Enable opt-in V0 pruning that skips proven-far exact distances." OFF)
 option(HNSWLIB_BUILD_FAISS_PQ_TOOLS "Build Faiss-based offline V0 PQ tools." OFF)
 set(FAISS_INCLUDE_DIR "" CACHE PATH "Faiss source/install root containing faiss/impl/ProductQuantizer.h")
@@ -29,6 +30,11 @@ endif()
 if(HNSWLIB_ENABLE_V0_REAL_PRUNING AND NOT HNSWLIB_ENABLE_EDGE_QUANT_V0)
     message(FATAL_ERROR
         "HNSWLIB_ENABLE_V0_REAL_PRUNING requires HNSWLIB_ENABLE_EDGE_QUANT_V0=ON")
+endif()
+
+if(HNSWLIB_ENABLE_V0_APPROX_SHADOW AND NOT HNSWLIB_ENABLE_V0_SHADOW_VALIDATION)
+    message(FATAL_ERROR
+        "HNSWLIB_ENABLE_V0_APPROX_SHADOW requires HNSWLIB_ENABLE_V0_SHADOW_VALIDATION=ON")
 endif()
 
 if(HNSWLIB_BUILD_FAISS_PQ_TOOLS AND NOT HNSWLIB_ENABLE_EDGE_QUANT_V0)
@@ -54,6 +60,10 @@ endif()
 
 if(HNSWLIB_ENABLE_V0_SHADOW_VALIDATION)
     target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_V0_SHADOW_VALIDATION=1)
+endif()
+
+if(HNSWLIB_ENABLE_V0_APPROX_SHADOW)
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_V0_APPROX_SHADOW=1)
 endif()
 
 if(HNSWLIB_ENABLE_V0_REAL_PRUNING)
@@ -322,6 +332,15 @@ if(HNSWLIB_EXAMPLES)
         )
         set_tests_properties(
           v0_margin_frontier_test
+          PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        )
+        add_test(
+          NAME v0_retry_shadow_analysis_test
+          COMMAND ${PYTHON_EXECUTABLE}
+                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/python/v0_retry_shadow_analysis_test.py
+        )
+        set_tests_properties(
+          v0_retry_shadow_analysis_test
           PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         )
       endif()
