@@ -27,11 +27,18 @@ FIELDS = [
 ]
 
 
-def write_run(root: Path, mode: str, active_recall: float, active_dco: int, retry: int) -> Path:
+def write_run(
+    root: Path,
+    mode: str,
+    active_recall: float,
+    active_dco: int,
+    retry: int,
+    beta: float = 1.4,
+) -> Path:
     run = root / mode
     run.mkdir()
     (run / "metadata.json").write_text(
-        json.dumps({"mode": mode, "approx_beta": 1.4, "ef_search": 200}),
+        json.dumps({"mode": mode, "approx_beta": beta, "ef_search": 200}),
         encoding="utf-8",
     )
     first_pruned = 40
@@ -120,6 +127,55 @@ def main() -> int:
         )
         assert "stage1_fail_active_included" in report
         assert (output / "active_per_query.csv").is_file()
+
+        safe_root = root / "recovery-not-needed"
+        safe_root.mkdir()
+        safe_no_retry = write_run(
+            safe_root, "approx-no-retry", 0.9487, 120, 0, beta=1.55
+        )
+        safe_retry = write_run(
+            safe_root, "approx-retry", 0.9488, 140, 20, beta=1.55
+        )
+        safe_output = safe_root / "analysis"
+        safe_completed = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--run-dir",
+                str(safe_no_retry),
+                "--run-dir",
+                str(safe_retry),
+                "--output-dir",
+                str(safe_output),
+                "--minimum-query-count",
+                "2",
+                "--expected-betas",
+                "1.55",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if safe_completed.returncode != 0:
+            raise AssertionError(
+                "recovery-not-needed analysis failed\n"
+                f"{safe_completed.stdout}\n{safe_completed.stderr}"
+            )
+        safe_decision = json.loads(
+            (safe_output / "active_experiment_decision.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert safe_decision["gate5_classification"] == "GO"
+        safe_row = safe_decision["formal_retry_rows"][0]
+        assert safe_row["recall_recovery"] < 0.50
+        assert safe_row["recall_recovery_not_needed"] is True
+        assert safe_row["numeric_gate_pass"] is True
+        safe_report = (
+            safe_output / "STAGE3_5_ACTIVE_RECALL_DCO_REPORT.md"
+        ).read_text(encoding="utf-8")
+        assert "not needed" in safe_report
     print("v0_active_experiment_analysis_test_ok")
     return 0
 

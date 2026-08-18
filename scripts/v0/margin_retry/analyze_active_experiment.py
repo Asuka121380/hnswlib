@@ -219,6 +219,9 @@ def main() -> int:
                 f"retry pair baseline mismatch for ef={row['ef_search']} beta={row['beta']}"
             )
         denominator = float(row["baseline_recall_at_k"]) - float(pair["active_recall_at_k"])
+        row["recall_recovery_not_needed"] = (
+            float(pair["recall_loss"]) <= 0.005 + 1e-12
+        )
         recovery: Optional[float]
         if denominator > 0.0:
             recovery = (
@@ -228,9 +231,6 @@ def main() -> int:
         else:
             recovery = None
             row["recall_recovery"] = ""
-            row["recall_recovery_not_needed"] = (
-                float(pair["recall_loss"]) <= 0.005 + 1e-12
-            )
         numeric_pass = (
             (recovery is not None and recovery >= 0.50
              or bool(row["recall_recovery_not_needed"]))
