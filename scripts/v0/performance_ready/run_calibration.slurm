@@ -31,9 +31,9 @@ betas_csv="${BETAS:-1.00,1.05,1.10,1.15,1.20,1.25,1.30,1.35,1.40,1.425,1.45,1.47
 modes_csv="${MODES:-approx-no-retry,approx-retry}"
 
 case "$run_role" in
-  calibration|validation|heldout) ;;
+  calibration|validation|heldout|full-tradeoff) ;;
   *)
-    echo "RUN_ROLE must be calibration, validation, or heldout" >&2
+    echo "RUN_ROLE must be calibration, validation, heldout, or full-tradeoff" >&2
     exit 2
     ;;
 esac

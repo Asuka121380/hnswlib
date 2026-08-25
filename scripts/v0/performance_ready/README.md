@@ -72,3 +72,27 @@ The submitted `run_tradeoff.slurm` delegates execution and summarization to
 `run_calibration.slurm`. Both submission and execution source the frozen
 `tradeoff_matrix.sh`, so the experiment matrix is not accepted from the shell
 environment and can change only in a reviewed repository commit.
+
+For the complete exploratory Recall/DCO/QPS curve, use
+`submit_full_beta_tradeoff.sh`. It submits three dependency-linked jobs: a
+reference metrics sweep, an instrumentation-free QPS sweep, and a final join.
+Both sweeps use all 1,000 frozen GIST queries and one shared 25-point beta grid:
+0.05 steps from 1.00 through 2.00 plus 1.525, 1.575, 1.625, and 1.675.
+
+The metrics job executes 50 active configurations (25 beta values by retry
+mode). The QPS job runs on an exclusive node and uses five seeded randomized
+complete blocks. Every block contains one baseline plus all 100 combinations
+of beta, retry mode, and legacy/gate-aware prefetch; every process performs
+five timed repetitions after warmup. Metrics and timing remain in separate
+binaries so Recall collection cannot contaminate QPS.
+
+```text
+bash scripts/v0/performance_ready/submit_full_beta_tradeoff.sh
+```
+
+The final dependency job writes `full_beta_tradeoff.csv` and
+`full_beta_tradeoff_report.json`. The CSV reports paired block-level QPS
+speedup confidence intervals alongside Recall, exact-DCO reduction, retry,
+and latency percentiles. `qps/manifest.json` is updated atomically after each
+process and supports reuse of checksum-verified completed results if the QPS
+job must be resumed under the identical contract.

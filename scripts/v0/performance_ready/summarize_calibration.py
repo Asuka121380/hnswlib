@@ -25,7 +25,7 @@ def main() -> int:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument(
         "--role",
-        choices=("calibration", "validation", "heldout"),
+        choices=("calibration", "validation", "heldout", "full-tradeoff"),
         default="calibration",
     )
     args = parser.parse_args()

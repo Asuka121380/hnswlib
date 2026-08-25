@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import csv
 import json
 import subprocess
 import sys
@@ -32,6 +33,111 @@ class PerformanceReadyInfrastructureTest(unittest.TestCase):
             for order in module.BALANCED_ORDERS:
                 counts[order[position]] += 1
             self.assertEqual(set(counts.values()), {2})
+
+    def test_full_beta_qps_schedule_is_complete_per_block(self) -> None:
+        module = load_module(
+            "run_full_beta_qps", SCRIPTS / "run_full_beta_qps.py")
+        configs = module.build_configurations(
+            ["1.00", "1.50"],
+            ["approx-no-retry", "approx-retry"],
+            ["legacy", "gate"],
+        )
+        self.assertEqual(len(configs), 9)
+        schedule = module.build_schedule(configs, blocks=5, seed=17)
+        expected_ids = {config["id"] for config in configs}
+        self.assertEqual(len(schedule), 5)
+        for block in schedule:
+            self.assertEqual({config["id"] for config in block}, expected_ids)
+            self.assertEqual(
+                sum(config["method"] == "baseline" for config in block), 1)
+
+    def test_full_beta_summary_pairs_qps_by_block(self) -> None:
+        metric_fields = (
+            "beta", "mode", "status", "query_count", "baseline_recall",
+            "v0_recall", "recall_loss", "recall_loss_queries",
+            "catastrophic_queries", "dco_reduction", "exact_distance_saved",
+            "first_pruned", "retry_exact", "decision_disagreement",
+            "near_threshold_disagreement", "relative_difference_max",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metrics_path = root / "metrics.csv"
+            with metrics_path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=metric_fields)
+                writer.writeheader()
+                writer.writerow({
+                    "beta": 1.0,
+                    "mode": "approx-retry",
+                    "status": "valid",
+                    "query_count": 1000,
+                    "baseline_recall": 0.9,
+                    "v0_recall": 0.899,
+                    "recall_loss": 0.001,
+                    "recall_loss_queries": 2,
+                    "catastrophic_queries": 0,
+                    "dco_reduction": 0.2,
+                    "exact_distance_saved": 20,
+                    "first_pruned": 21,
+                    "retry_exact": 1,
+                    "decision_disagreement": 0,
+                    "near_threshold_disagreement": 0,
+                    "relative_difference_max": 1e-7,
+                })
+            qps_dir = root / "qps"
+            qps_dir.mkdir()
+            completed = []
+            for block in range(5):
+                for config, qps in (
+                    ({"id": "baseline", "method": "baseline",
+                      "beta": None, "prefetch": "none"}, 100.0),
+                    ({"id": "active", "method": "approx-retry",
+                      "beta": "1.00", "prefetch": "gate"}, 120.0),
+                ):
+                    run_id = f"b{block}-{config['id']}"
+                    result = qps_dir / f"{run_id}.json"
+                    result.write_text(json.dumps({
+                        "qps": qps,
+                        "latency_p50_ns": 10,
+                        "latency_p95_ns": 20,
+                        "latency_p99_ns": 30,
+                        "result_checksum": config["id"],
+                    }), encoding="utf-8")
+                    completed.append({
+                        "run_id": run_id,
+                        "block": block,
+                        "position": 0,
+                        "config": config,
+                        "result": result.name,
+                        "sha256": "unused-by-summary",
+                    })
+            (qps_dir / "manifest.json").write_text(json.dumps({
+                "status": "complete",
+                "contract": {
+                    "experiment_commit": "abc",
+                    "blocks": 5,
+                    "betas": ["1.00"],
+                    "modes": ["approx-retry"],
+                    "prefetches": ["gate"],
+                    "query_count": 1000,
+                },
+                "completed": completed,
+            }), encoding="utf-8")
+            output = root / "combined.csv"
+            report = root / "report.json"
+            completed_process = subprocess.run([
+                sys.executable,
+                str(SCRIPTS / "summarize_full_beta_tradeoff.py"),
+                "--metrics-summary", str(metrics_path),
+                "--qps-dir", str(qps_dir),
+                "--output", str(output),
+                "--report", str(report),
+            ])
+            self.assertEqual(completed_process.returncode, 0)
+            with output.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 2)
+            self.assertAlmostEqual(float(rows[1]["qps_speedup_mean"]), 1.2)
+            self.assertGreater(float(rows[1]["qps_speedup_ci_low"]), 1.0)
 
     def test_break_even_pass_and_fail(self) -> None:
         micro = {
