@@ -24,9 +24,11 @@ index_path="${INDEX_PATH:-$HOME/IndividualProject/datasets/gist1m/indexes/gist1m
 sidecar_path="${SIDECAR_PATH:-$HOME/IndividualProject/results/v0_offline/gist1m/20260726-98c5595-strict/gist1m_m32_nbits8_strict.v0meta}"
 query_start="${QUERY_START:-0}"
 query_count="${QUERY_COUNT:-300}"
+k="${K:-10}"
 ef_search="${EF_SEARCH:-200}"
 run_role="${RUN_ROLE:-calibration}"
 betas_csv="${BETAS:-1.00,1.05,1.10,1.15,1.20,1.25,1.30,1.35,1.40,1.425,1.45,1.475,1.50,1.525,1.55,1.60,1.70,1.80,2.00}"
+modes_csv="${MODES:-approx-no-retry,approx-retry}"
 
 case "$run_role" in
   calibration|validation|heldout) ;;
@@ -64,18 +66,38 @@ fi
 
 branch="$(git branch --show-current)"
 IFS=',' read -r -a betas <<< "$betas_csv"
+IFS=',' read -r -a modes <<< "$modes_csv"
 if (( ${#betas[@]} == 0 )); then
   echo "BETAS must not be empty" >&2
   exit 2
 fi
+if (( ${#modes[@]} == 0 )); then
+  echo "MODES must not be empty" >&2
+  exit 2
+fi
+for mode in "${modes[@]}"; do
+  case "$mode" in
+    approx-no-retry|approx-retry) ;;
+    *)
+      echo "Unsupported calibration mode: $mode" >&2
+      exit 2
+      ;;
+  esac
+done
 
 echo "host=$(hostname)"
 echo "job=${SLURM_JOB_ID:-unavailable}"
 echo "start=$(date --iso-8601=seconds)"
 echo "commit=$actual_commit branch=$branch"
-echo "query_start=$query_start query_count=$query_count ef_search=$ef_search"
+echo "query_start=$query_start query_count=$query_count k=$k ef_search=$ef_search"
 echo "run_role=$run_role"
 echo "betas=$betas_csv"
+echo "modes=$modes_csv"
+echo "reference_build=$reference_build"
+echo "analysis_python=$analysis_python"
+echo "dataset_config=$dataset_config"
+echo "index_path=$index_path"
+echo "sidecar_path=$sidecar_path"
 cmake --version | head -n 1
 g++ --version | head -n 1
 "$analysis_python" --version
@@ -96,7 +118,7 @@ export MKL_NUM_THREADS=1
 mkdir -p "$RUN_ROOT/runs"
 
 for beta in "${betas[@]}"; do
-  for mode in approx-no-retry approx-retry; do
+  for mode in "${modes[@]}"; do
     label="${mode}-beta${beta}"
     output_dir="$RUN_ROOT/runs/$label"
     if [[ -f "$output_dir/complete.json" ]]; then
@@ -114,7 +136,7 @@ for beta in "${betas[@]}"; do
       --run-id "raw-fast-v1-${run_role}-q${query_start}-n${query_count}-${label}" \
       --query-start "$query_start" \
       --query-count "$query_count" \
-      --k 10 \
+      --k "$k" \
       --ef-search "$ef_search" \
       --approx-beta "$beta" \
       --producer-git-commit "$actual_commit" \
@@ -124,7 +146,7 @@ for beta in "${betas[@]}"; do
   done
 done
 
-expected_count=$(( ${#betas[@]} * 2 ))
+expected_count=$(( ${#betas[@]} * ${#modes[@]} ))
 "$analysis_python" \
   scripts/v0/performance_ready/summarize_calibration.py \
   --run-root "$RUN_ROOT" \

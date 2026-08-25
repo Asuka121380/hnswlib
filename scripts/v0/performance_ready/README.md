@@ -54,3 +54,21 @@ completed run directories, and calls `summarize_calibration.py` after all
 no-retry/retry configurations finish. Set `RUN_ROLE=validation` or
 `RUN_ROLE=heldout` for later frozen splits so run IDs, summaries, and completion
 markers preserve their scientific role.
+
+Use `submit_tradeoff.sh` for the frozen trade-off experiment instead of
+manually exporting query ranges or beta lists. The wrapper fixes the validation
+split to queries 300--599, the held-out split to queries 600--999, and both to
+the reviewed beta grid from 1.30 through 1.70. It rejects dirty worktrees and
+existing result roots, derives `EXPECTED_COMMIT` from HEAD, and writes the
+submission parameters and Slurm job ID to `submission.env`.
+
+```text
+bash scripts/v0/performance_ready/submit_tradeoff.sh validation
+bash scripts/v0/performance_ready/submit_tradeoff.sh heldout
+```
+
+Pass an explicit second argument when a new result-root version is required.
+The submitted `run_tradeoff.slurm` delegates execution and summarization to
+`run_calibration.slurm`. Both submission and execution source the frozen
+`tradeoff_matrix.sh`, so the experiment matrix is not accepted from the shell
+environment and can change only in a reviewed repository commit.
