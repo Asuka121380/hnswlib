@@ -13,8 +13,9 @@
 set -euo pipefail
 
 : "${TRADEOFF_SPLIT:?TRADEOFF_SPLIT is required (validation or heldout)}"
+: "${REPO_ROOT:?REPO_ROOT is required}"
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+script_dir="$REPO_ROOT/scripts/v0/performance_ready"
 source "$script_dir/tradeoff_matrix.sh"
 configure_tradeoff_split "$TRADEOFF_SPLIT"
 
@@ -28,4 +29,4 @@ export EF_SEARCH="$TRADEOFF_EF_SEARCH"
 export BETAS="$TRADEOFF_BETAS"
 export MODES="$TRADEOFF_MODES"
 
-exec bash "$script_dir/run_calibration.slurm"
+exec "$BASH" "$script_dir/run_calibration.slurm"
