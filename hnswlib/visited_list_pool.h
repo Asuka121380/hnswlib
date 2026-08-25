@@ -11,23 +11,39 @@ class VisitedList {
  public:
     vl_type curV;
     vl_type *mass;
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+    vl_type *approx_pruned_mass;
+#endif
     unsigned int numelements;
 
     VisitedList(int numelements1) {
         curV = -1;
         numelements = numelements1;
         mass = new vl_type[numelements];
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+        approx_pruned_mass = new vl_type[numelements];
+#endif
     }
 
     void reset() {
         curV++;
         if (curV == 0) {
             memset(mass, 0, sizeof(vl_type) * numelements);
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+            memset(
+                approx_pruned_mass, 0,
+                sizeof(vl_type) * numelements);
+#endif
             curV++;
         }
     }
 
-    ~VisitedList() { delete[] mass; }
+    ~VisitedList() {
+        delete[] mass;
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+        delete[] approx_pruned_mass;
+#endif
+    }
 };
 ///////////////////////////////////////////////////////////
 //

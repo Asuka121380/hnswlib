@@ -126,6 +126,29 @@ inline double readFloat64LittleEndian(const uint8_t* bytes) {
     return value;
 }
 
+// Performance paths are enabled only after the sidecar has passed the full
+// portable validator.  On the little-endian hosts supported by the current
+// benchmark contract, memcpy avoids rebuilding every scalar byte-by-byte in
+// the query hot loop while remaining safe for unaligned records.
+inline bool nativeIsLittleEndian() {
+    const uint16_t value = 1U;
+    return *reinterpret_cast<const uint8_t*>(&value) == 1U;
+}
+
+inline uint64_t readUint64NativeLittleEndianUnchecked(
+    const uint8_t* bytes) {
+    uint64_t value = 0U;
+    std::memcpy(&value, bytes, sizeof(value));
+    return value;
+}
+
+inline double readFloat64NativeLittleEndianUnchecked(
+    const uint8_t* bytes) {
+    double value = 0.0;
+    std::memcpy(&value, bytes, sizeof(value));
+    return value;
+}
+
 inline V0Sha256Digest sha256(const uint8_t* bytes, size_t size) {
     EdgeQuantV0Sha256 sha;
     if (size != 0U) {
@@ -662,6 +685,10 @@ class V0EdgeRecordView {
         return record_[subquantizer];
     }
 
+    const uint8_t* codeDataUnchecked() const {
+        return record_;
+    }
+
     uint32_t codeSize() const {
         return code_size_;
     }
@@ -688,6 +715,18 @@ class V0EdgeRecordView {
     double numericPadding() const {
         return edge_quant_v0_detail::readFloat64LittleEndian(
             record_ + scalar_offset_ + 24U);
+    }
+
+    double edgeLengthNativeUnchecked() const {
+        return edge_quant_v0_detail::
+            readFloat64NativeLittleEndianUnchecked(
+                record_ + scalar_offset_);
+    }
+
+    double anchorProjectionNativeUnchecked() const {
+        return edge_quant_v0_detail::
+            readFloat64NativeLittleEndianUnchecked(
+                record_ + scalar_offset_ + 16U);
     }
 
  private:
@@ -734,6 +773,14 @@ class V0SidecarView {
             node_offset_index * sizeof(uint64_t));
     }
 
+    uint64_t nodeOffsetNativeUnchecked(
+        size_t node_offset_index) const {
+        return edge_quant_v0_detail::
+            readUint64NativeLittleEndianUnchecked(
+                bytes_ + header_.node_offsets.offset +
+                node_offset_index * sizeof(uint64_t));
+    }
+
     V0EdgeRecordView edgeRecord(size_t edge_index) const {
         if (edge_index >= header_.directed_edge_count) {
             throw std::out_of_range(
@@ -743,6 +790,19 @@ class V0SidecarView {
             bytes_ + header_.edge_records.offset +
                 edge_index * header_.edge_record_stride,
             header_);
+    }
+
+    V0EdgeRecordView edgeRecordUnchecked(size_t edge_index) const {
+        return V0EdgeRecordView(
+            bytes_ + header_.edge_records.offset +
+                edge_index * header_.edge_record_stride,
+            header_);
+    }
+
+    const uint8_t* edgeRecordDataUnchecked(
+        size_t edge_index) const {
+        return bytes_ + header_.edge_records.offset +
+            edge_index * header_.edge_record_stride;
     }
 
  private:

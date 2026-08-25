@@ -195,6 +195,32 @@ void testQueryMetadataLifecycle() {
         record.code(1U) ==
             static_cast<uint8_t>((expected_edge_index / 2U) % 2U),
         "source/slot returned the wrong PQ code");
+    const hnswlib::EdgeQuantV0Metadata& metadata =
+        index.getEdgeQuantV0Metadata();
+    v0_test::require(
+        metadata.nativeCodebookSize() ==
+            static_cast<size_t>(
+                metadata.header().codebook.size / sizeof(float)),
+        "native codebook has the wrong size");
+    for (size_t i = 0U; i < metadata.nativeCodebookSize(); ++i) {
+        v0_test::require(
+            metadata.nativeCodebookData()[i] ==
+                metadata.view().codebookCentroid(i),
+            "native codebook differs from validated sidecar");
+    }
+    const size_t source_degree = graph.neighbors(
+        static_cast<hnswlib::tableint>(source)).size;
+    const hnswlib::V0FastEdgeRecordSpan fast_span =
+        metadata.fastEdgeSpan(
+            static_cast<hnswlib::tableint>(source), source_degree);
+    v0_test::require(
+        fast_span.size() == source_degree &&
+        fast_span.edgeUnchecked(0U).code(0U) == record.code(0U) &&
+        fast_span.edgeUnchecked(0U).edgeLengthNativeUnchecked() ==
+            record.edgeLength() &&
+        fast_span.edgeUnchecked(0U).anchorProjectionNativeUnchecked() ==
+            record.anchorProjection(),
+        "fast edge span differs from checked metadata access");
     v0_test::requireThrows(
         [&index, &graph, source]() {
             (void)index.getEdgeQuantV0Record(

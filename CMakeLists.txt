@@ -19,9 +19,22 @@ option(HNSWLIB_ENABLE_V0_SHADOW_VALIDATION "Enable exact shadow validation for V
 option(HNSWLIB_ENABLE_V0_APPROX_SHADOW "Enable hypothetical margin/retry shadow instrumentation." OFF)
 option(HNSWLIB_ENABLE_V0_REAL_PRUNING "Enable opt-in V0 pruning that skips proven-far exact distances." OFF)
 option(HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING "Enable active raw-margin pruning with optional second-visit retry." OFF)
+option(HNSWLIB_ENABLE_V0_STRICT_FP_CONTRACT "Apply strict V0 directed-rounding compiler flags." ON)
+option(HNSWLIB_PERFORMANCE_COMPARABLE_FLAGS "Use identical -O3-class optimization for baseline and V0 performance builds." OFF)
 option(HNSWLIB_BUILD_FAISS_PQ_TOOLS "Build Faiss-based offline V0 PQ tools." OFF)
 set(FAISS_INCLUDE_DIR "" CACHE PATH "Faiss source/install root containing faiss/impl/ProductQuantizer.h")
 set(FAISS_LIBRARY "" CACHE FILEPATH "Path to the Faiss CPU shared/static library")
+
+if(HNSWLIB_ENABLE_V0_STRICT_FP_CONTRACT)
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_V0_STRICT_FP_CONTRACT_ENABLED=1)
+else()
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_V0_STRICT_FP_CONTRACT_ENABLED=0)
+endif()
+if(HNSWLIB_PERFORMANCE_COMPARABLE_FLAGS)
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_PERFORMANCE_COMPARABLE_FLAGS_ENABLED=1)
+else()
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_PERFORMANCE_COMPARABLE_FLAGS_ENABLED=0)
+endif()
 
 if(HNSWLIB_ENABLE_V0_SHADOW_VALIDATION AND NOT HNSWLIB_ENABLE_EDGE_QUANT_V0)
     message(FATAL_ERROR
@@ -50,6 +63,9 @@ endif()
 
 if(HNSWLIB_ENABLE_EDGE_QUANT_V0)
     target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_EDGE_QUANT_V0=1)
+endif()
+
+if(HNSWLIB_ENABLE_EDGE_QUANT_V0 AND HNSWLIB_ENABLE_V0_STRICT_FP_CONTRACT)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(hnswlib INTERFACE -fno-fast-math)
         if(COMMAND target_link_options)
@@ -106,7 +122,7 @@ if(HNSWLIB_EXAMPLES)
     set(CMAKE_CXX_STANDARD 11)
     enable_testing()
 
-    if(HNSWLIB_ENABLE_EDGE_QUANT_V0)
+    if(HNSWLIB_ENABLE_EDGE_QUANT_V0 OR HNSWLIB_PERFORMANCE_COMPARABLE_FLAGS)
       set(HNSWLIB_OPTIMIZATION_FLAG "-O3")
     else()
       set(HNSWLIB_OPTIMIZATION_FLAG "-Ofast")
@@ -186,6 +202,16 @@ if(HNSWLIB_EXAMPLES)
 
     add_executable(real_data_trace_runner examples/cpp/real_data_trace_runner.cpp)
     target_link_libraries(real_data_trace_runner hnswlib)
+
+    if(HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING)
+      add_executable(v0_performance_runner examples/cpp/v0_performance_runner.cpp)
+      target_link_libraries(v0_performance_runner hnswlib)
+      add_test(NAME v0_performance_runner_help COMMAND v0_performance_runner --help)
+
+      add_executable(v0_fast_kernel_microbenchmark examples/cpp/v0_fast_kernel_microbenchmark.cpp)
+      target_link_libraries(v0_fast_kernel_microbenchmark hnswlib)
+      add_test(NAME v0_fast_kernel_microbenchmark_help COMMAND v0_fast_kernel_microbenchmark --help)
+    endif()
 
     if(HNSWLIB_ENABLE_BASELINE_TRACE)
       add_executable(baseline_trace_runner examples/cpp/baseline_trace_runner.cpp)
@@ -366,12 +392,25 @@ if(HNSWLIB_EXAMPLES)
           v0_active_experiment_analysis_test
           PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         )
+        add_test(
+          NAME v0_performance_ready_test
+          COMMAND ${PYTHON_EXECUTABLE}
+                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/python/v0_performance_ready_test.py
+        )
+        set_tests_properties(
+          v0_performance_ready_test
+          PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        )
       endif()
 
       if(HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING)
         add_executable(v0_approx_real_pruning_test tests/cpp/v0_approx_real_pruning_test.cpp)
         target_link_libraries(v0_approx_real_pruning_test hnswlib)
         add_test(NAME v0_approx_real_pruning_test COMMAND v0_approx_real_pruning_test)
+
+        add_executable(v0_retry_state_test tests/cpp/v0_retry_state_test.cpp)
+        target_link_libraries(v0_retry_state_test hnswlib)
+        add_test(NAME v0_retry_state_test COMMAND v0_retry_state_test)
       endif()
     endif()
 endif()

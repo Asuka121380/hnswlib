@@ -489,7 +489,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     template <
         bool bare_bone_search = true,
         bool collect_metrics = false,
-        bool use_edge_quant_v0 = false>
+        bool use_edge_quant_v0 = false,
+        bool v0_approx_retry = false,
+        bool v0_gate_aware_prefetch = false,
+        bool v0_collect_metrics = true>
     std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
     searchBaseLayerST(
         tableint ep_id,
@@ -506,6 +509,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         , bool v0_enable_real_pruning = false
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
         , const V0ApproxPruningConfig* v0_approx_config = nullptr
+        , const EdgeQuantV0ApproxQueryContext* v0_approx_query = nullptr
+        , const EdgeQuantV0Metadata* v0_approx_metadata = nullptr
 #endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
         , V0ShadowValidationCollector* v0_shadow = nullptr
@@ -514,16 +519,23 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
         ) const {
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
-        if (use_edge_quant_v0 &&
-            (v0_query == nullptr || v0_metrics == nullptr)) {
+        if (use_edge_quant_v0 && v0_collect_metrics &&
+            v0_metrics == nullptr) {
             throw std::invalid_argument(
-                "V0 search requires query context and metrics");
+                "V0 search requires metrics");
         }
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
         if (v0_approx_config != nullptr &&
-            (!use_edge_quant_v0 || !v0_approx_config->valid())) {
+            (!use_edge_quant_v0 || !v0_approx_config->valid() ||
+             v0_approx_query == nullptr ||
+             v0_approx_metadata == nullptr)) {
             throw std::invalid_argument(
                 "Invalid V0 approximate-pruning configuration");
+        }
+        if (use_edge_quant_v0 && v0_approx_config == nullptr &&
+            v0_query == nullptr) {
+            throw std::invalid_argument(
+                "V0 strict search requires a query context");
         }
 #endif
 #endif
@@ -531,11 +543,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         vl_type *visited_array = vl->mass;
         vl_type visited_array_tag = vl->curV;
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
-        std::vector<uint8_t> v0_approx_pruned;
-        if (v0_approx_config != nullptr) {
-            v0_approx_pruned.assign(max_elements_, 0U);
+        vl_type* v0_approx_pruned_array = vl->approx_pruned_mass;
+        if (v0_collect_metrics && v0_approx_config != nullptr &&
+            v0_approx_retry) {
             v0_metrics->approx_state_bytes =
-                static_cast<uint64_t>(v0_approx_pruned.size());
+                static_cast<uint64_t>(max_elements_) * sizeof(vl_type);
         }
 #endif
 #ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
@@ -568,6 +580,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         }
 
         visited_array[ep_id] = visited_array_tag;
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+        double v0_scaled_threshold =
+            v0_approx_config != nullptr ?
+                v0_approx_config->beta *
+                    static_cast<double>(lowerBound) :
+                0.0;
+#endif
 
         while (!candidate_set.empty()) {
             std::pair<dist_t, tableint> current_node_pair = candidate_set.top();
@@ -599,8 +618,15 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
             int *data = (int *) get_linklist0(current_node_id);
             size_t size = getListCount((linklistsizeint*)data);
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+            V0FastEdgeRecordSpan v0_fast_edge_span;
+            if (v0_approx_config != nullptr) {
+                v0_fast_edge_span = v0_approx_metadata->fastEdgeSpan(
+                    current_node_id, size);
+            }
+#endif
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
-            if (use_edge_quant_v0) {
+            if (use_edge_quant_v0 && v0_collect_metrics) {
                 ++v0_metrics->expanded_nodes;
                 v0_metrics->edge_scans +=
                     static_cast<uint64_t>(size);
@@ -631,36 +657,80 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             }
 
 #ifdef USE_SSE
-            _mm_prefetch((char *) (visited_array + *(data + 1)), _MM_HINT_T0);
-            _mm_prefetch((char *) (visited_array + *(data + 1) + 64), _MM_HINT_T0);
-            _mm_prefetch(data_level0_memory_ + (*(data + 1)) * size_data_per_element_ + offsetData_, _MM_HINT_T0);
-            _mm_prefetch((char *) (data + 2), _MM_HINT_T0);
+            if (size != 0U) {
+                _mm_prefetch(
+                    (char *) (visited_array + *(data + 1)),
+                    _MM_HINT_T0);
+                _mm_prefetch(
+                    (char *) (visited_array + *(data + 1) + 64),
+                    _MM_HINT_T0);
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+                if (v0_gate_aware_prefetch &&
+                    v0_approx_config != nullptr) {
+                    _mm_prefetch(
+                        reinterpret_cast<const char*>(
+                            v0_fast_edge_span.recordDataUnchecked(0U)),
+                        _MM_HINT_T0);
+                } else
+#endif
+                {
+                    _mm_prefetch(
+                        data_level0_memory_ +
+                            (*(data + 1)) * size_data_per_element_ +
+                            offsetData_,
+                        _MM_HINT_T0);
+                }
+                _mm_prefetch((char *) (data + 2), _MM_HINT_T0);
+            }
 #endif
 
             for (size_t j = 1; j <= size; j++) {
                 int candidate_id = *(data + j);
 //                    if (candidate_id == 0) continue;
 #ifdef USE_SSE
-                _mm_prefetch((char *) (visited_array + *(data + j + 1)), _MM_HINT_T0);
-                _mm_prefetch(data_level0_memory_ + (*(data + j + 1)) * size_data_per_element_ + offsetData_,
-                                _MM_HINT_T0);  ////////////
+                if (j < size) {
+                    _mm_prefetch(
+                        (char *) (visited_array + *(data + j + 1)),
+                        _MM_HINT_T0);
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+                    if (v0_gate_aware_prefetch &&
+                        v0_approx_config != nullptr) {
+                        _mm_prefetch(
+                            reinterpret_cast<const char*>(
+                                v0_fast_edge_span.recordDataUnchecked(j)),
+                            _MM_HINT_T0);
+                    } else
+#endif
+                    {
+                        _mm_prefetch(
+                            data_level0_memory_ +
+                                (*(data + j + 1)) *
+                                    size_data_per_element_ +
+                                offsetData_,
+                            _MM_HINT_T0);
+                    }
+                }
 #endif
                 const bool v0_candidate_exact_visited =
                     visited_array[candidate_id] == visited_array_tag;
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
                 bool v0_candidate_is_retry = false;
                 if (!v0_candidate_exact_visited &&
+                    v0_approx_retry &&
                     v0_approx_config != nullptr &&
-                    v0_approx_pruned[candidate_id] != 0U) {
+                    v0_approx_pruned_array[candidate_id] ==
+                        visited_array_tag) {
                     v0_candidate_is_retry = true;
                     visited_array[candidate_id] = visited_array_tag;
-                    ++v0_metrics->approx_retry_encountered;
-                    ++v0_metrics->approx_retry_exact_distance;
-                    if (v0_metrics->exact_distance_saved == 0U) {
-                        throw std::logic_error(
-                            "V0 retry has no matching first prune");
+                    if (v0_collect_metrics) {
+                        ++v0_metrics->approx_retry_encountered;
+                        ++v0_metrics->approx_retry_exact_distance;
+                        if (v0_metrics->exact_distance_saved == 0U) {
+                            throw std::logic_error(
+                                "V0 retry has no matching first prune");
+                        }
+                        --v0_metrics->exact_distance_saved;
                     }
-                    --v0_metrics->exact_distance_saved;
                 }
 #endif
                 if (!v0_candidate_exact_visited) {
@@ -668,26 +738,93 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     if (v0_approx_config != nullptr &&
                         !v0_candidate_is_retry) {
                         if (top_candidates.size() < ef) {
-                            ++v0_metrics->exact_fallback;
-                            ++v0_metrics->approx_estimator_fallback;
+                            if (v0_collect_metrics) {
+                                ++v0_metrics->exact_fallback;
+                                ++v0_metrics->approx_estimator_fallback;
+                            }
                         } else {
                             const V0RawEstimateResult raw =
-                                v0_query->evaluateRaw(
-                                    getEdgeQuantV0Record(
-                                        current_node_id, j - 1U),
+                                v0_approx_query->evaluateRawFast(
+                                    v0_fast_edge_span.edgeUnchecked(
+                                        j - 1U),
                                     static_cast<double>(candidate_dist));
+                            if (v0_collect_metrics) {
+                                const V0RawEstimateResult reference =
+                                    v0_query->evaluateRaw(
+                                        v0_fast_edge_span.edgeUnchecked(
+                                            j - 1U),
+                                        static_cast<double>(candidate_dist));
+                                if (raw.status != reference.status) {
+                                    ++v0_metrics->
+                                        fast_reference_status_disagreement;
+                                }
+                                if (raw.valid() && reference.valid()) {
+                                    ++v0_metrics->fast_reference_valid_pairs;
+                                    const double difference = std::fabs(
+                                        raw.approximate_squared_distance -
+                                        reference.approximate_squared_distance);
+                                    v0_metrics->
+                                        fast_reference_absolute_difference_sum +=
+                                            difference;
+                                    v0_metrics->
+                                        fast_reference_absolute_difference_max =
+                                            std::max(
+                                                v0_metrics->
+                                                    fast_reference_absolute_difference_max,
+                                                difference);
+                                    const double denominator = std::max(
+                                        std::fabs(reference.
+                                            approximate_squared_distance),
+                                        std::numeric_limits<double>::min());
+                                    const double relative =
+                                        difference / denominator;
+                                    v0_metrics->
+                                        fast_reference_relative_difference_sum +=
+                                            relative;
+                                    v0_metrics->
+                                        fast_reference_relative_difference_max =
+                                            std::max(
+                                                v0_metrics->
+                                                    fast_reference_relative_difference_max,
+                                                relative);
+                                    const bool fast_decision =
+                                        raw.approximate_squared_distance >
+                                            v0_scaled_threshold;
+                                    const bool reference_decision =
+                                        reference.approximate_squared_distance >
+                                            v0_scaled_threshold;
+                                    if (fast_decision != reference_decision) {
+                                        ++v0_metrics->
+                                            fast_reference_decision_disagreement;
+                                    }
+                                    const double near_band = std::max(
+                                        1e-12,
+                                        std::fabs(v0_scaled_threshold) * 0.01);
+                                    if (std::fabs(reference.
+                                            approximate_squared_distance -
+                                            v0_scaled_threshold) <= near_band) {
+                                        ++v0_metrics->
+                                            fast_reference_near_threshold_pairs;
+                                        if (fast_decision != reference_decision) {
+                                            ++v0_metrics->
+                                                fast_reference_near_threshold_disagreement;
+                                        }
+                                    }
+                                }
+                            }
                             if (raw.valid()) {
-                                ++v0_metrics->approx_eligible_first_visits;
-                                const double scaled_threshold =
-                                    v0_approx_config->beta *
-                                    static_cast<double>(lowerBound);
-                                if (std::isfinite(scaled_threshold) &&
-                                    raw.approximate_squared_distance >
-                                        scaled_threshold) {
-                                    ++v0_metrics->approx_first_pruned;
-                                    ++v0_metrics->exact_distance_saved;
-                                    if (v0_approx_config->retry_enabled) {
-                                        v0_approx_pruned[candidate_id] = 1U;
+                                if (v0_collect_metrics) {
+                                    ++v0_metrics->approx_eligible_first_visits;
+                                }
+                                if (raw.approximate_squared_distance >
+                                    v0_scaled_threshold) {
+                                    if (v0_collect_metrics) {
+                                        ++v0_metrics->approx_first_pruned;
+                                        ++v0_metrics->exact_distance_saved;
+                                    }
+                                    if (v0_approx_retry) {
+                                        v0_approx_pruned_array[candidate_id] =
+                                            visited_array_tag;
                                     } else {
                                         visited_array[candidate_id] =
                                             visited_array_tag;
@@ -697,11 +834,15 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                             } else if (
                                 raw.status == V0BoundStatus::ExactOnly ||
                                 raw.status == V0BoundStatus::ZeroLength) {
-                                ++v0_metrics->exact_only_fallback;
-                                ++v0_metrics->approx_estimator_fallback;
+                                if (v0_collect_metrics) {
+                                    ++v0_metrics->exact_only_fallback;
+                                    ++v0_metrics->approx_estimator_fallback;
+                                }
                             } else {
-                                ++v0_metrics->exact_fallback;
-                                ++v0_metrics->approx_estimator_fallback;
+                                if (v0_collect_metrics) {
+                                    ++v0_metrics->exact_fallback;
+                                    ++v0_metrics->approx_estimator_fallback;
+                                }
                             }
                         }
                         visited_array[candidate_id] = visited_array_tag;
@@ -796,8 +937,15 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
 
                     char *currObj1 = (getDataByInternalId(candidate_id));
+#if defined(USE_SSE) && \
+    defined(HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING)
+                    if (v0_gate_aware_prefetch &&
+                        v0_approx_config != nullptr) {
+                        _mm_prefetch(currObj1, _MM_HINT_T0);
+                    }
+#endif
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
-                    if (use_edge_quant_v0) {
+                    if (use_edge_quant_v0 && v0_collect_metrics) {
                         ++v0_metrics->exact_distance_computed;
                     }
 #endif
@@ -918,7 +1066,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     if (flag_consider_candidate) {
                         candidate_set.emplace(-dist, candidate_id);
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
-                        if (v0_candidate_is_retry) {
+                        if (v0_collect_metrics && v0_candidate_is_retry) {
                             ++v0_metrics->approx_retry_inserted_candidate;
                         }
 #endif
@@ -938,7 +1086,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                             (!isMarkedDeleted(candidate_id) && ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(candidate_id))))) {
                             top_candidates.emplace(dist, candidate_id);
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
-                            if (v0_candidate_is_retry) {
+                            if (v0_collect_metrics && v0_candidate_is_retry) {
                                 ++v0_metrics->approx_retry_inserted_result;
                             }
 #endif
@@ -970,8 +1118,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                             }
                         }
 
-                        if (!top_candidates.empty())
+                        if (!top_candidates.empty()) {
                             lowerBound = top_candidates.top().first;
+#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+                            if (v0_approx_config != nullptr) {
+                                v0_scaled_threshold =
+                                    v0_approx_config->beta *
+                                    static_cast<double>(lowerBound);
+                            }
+#endif
+                        }
                     }
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
                     if (trace != nullptr) {
@@ -1008,7 +1164,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     if (trace != nullptr) ++trace->summary.n_duplicate;
 #endif
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
-                    if (use_edge_quant_v0) {
+                    if (use_edge_quant_v0 && v0_collect_metrics) {
                         ++v0_metrics->duplicate_encounters;
                     }
 #ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
@@ -1868,7 +2024,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     }
 
 
-    template <bool use_edge_quant_v0 = false>
+    template <
+        bool use_edge_quant_v0 = false,
+        bool v0_approx_retry = false,
+        bool v0_gate_aware_prefetch = false,
+        bool v0_collect_metrics = true>
     std::priority_queue<std::pair<dist_t, labeltype >>
     searchKnnInternal(
         const void *query_data,
@@ -1883,6 +2043,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         , bool v0_enable_real_pruning = false
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
         , const V0ApproxPruningConfig* v0_approx_config = nullptr
+        , const EdgeQuantV0ApproxQueryContext* v0_approx_query = nullptr
+        , const EdgeQuantV0Metadata* v0_approx_metadata = nullptr
 #endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
         , V0ShadowValidationCollector* v0_shadow = nullptr
@@ -1955,12 +2117,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         bool bare_bone_search = !num_deleted_ && !isIdAllowed;
         if (bare_bone_search) {
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
-            top_candidates = searchBaseLayerST<true, false, use_edge_quant_v0>(
+            top_candidates = searchBaseLayerST<
+                true, false, use_edge_quant_v0, v0_approx_retry,
+                v0_gate_aware_prefetch, v0_collect_metrics>(
                     currObj, query_data, std::max(ef_, k), isIdAllowed, nullptr, trace
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
                     , v0_query, v0_metrics, v0_enable_real_pruning
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
                     , v0_approx_config
+                    , v0_approx_query
+                    , v0_approx_metadata
 #endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
@@ -1968,12 +2134,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
                     );
 #else
-            top_candidates = searchBaseLayerST<true, false, use_edge_quant_v0>(
+            top_candidates = searchBaseLayerST<
+                true, false, use_edge_quant_v0, v0_approx_retry,
+                v0_gate_aware_prefetch, v0_collect_metrics>(
                     currObj, query_data, std::max(ef_, k), isIdAllowed
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
                     , nullptr, v0_query, v0_metrics, v0_enable_real_pruning
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
                     , v0_approx_config
+                    , v0_approx_query
+                    , v0_approx_metadata
 #endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
@@ -1983,12 +2153,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
         } else {
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
-            top_candidates = searchBaseLayerST<false, false, use_edge_quant_v0>(
+            top_candidates = searchBaseLayerST<
+                false, false, use_edge_quant_v0, v0_approx_retry,
+                v0_gate_aware_prefetch, v0_collect_metrics>(
                     currObj, query_data, std::max(ef_, k), isIdAllowed, nullptr, trace
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
                     , v0_query, v0_metrics, v0_enable_real_pruning
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
                     , v0_approx_config
+                    , v0_approx_query
+                    , v0_approx_metadata
 #endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
@@ -1996,12 +2170,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
                     );
 #else
-            top_candidates = searchBaseLayerST<false, false, use_edge_quant_v0>(
+            top_candidates = searchBaseLayerST<
+                false, false, use_edge_quant_v0, v0_approx_retry,
+                v0_gate_aware_prefetch, v0_collect_metrics>(
                     currObj, query_data, std::max(ef_, k), isIdAllowed
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
                     , nullptr, v0_query, v0_metrics, v0_enable_real_pruning
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
                     , v0_approx_config
+                    , v0_approx_query
+                    , v0_approx_metadata
 #endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
@@ -2100,6 +2278,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             , false
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
             , nullptr
+            , nullptr
+            , nullptr
 #endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
             , shadow
@@ -2143,6 +2323,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             , true
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
             , nullptr
+            , nullptr
+            , nullptr
 #endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
             , nullptr
@@ -2154,6 +2336,43 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
 
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
+    template <
+        bool retry_enabled,
+        bool gate_aware_prefetch,
+        bool collect_v0_metrics = true>
+    std::priority_queue<std::pair<dist_t, labeltype > >
+    searchKnnV0ApproxConfigured(
+        const void* query_data,
+        size_t k,
+        const V0ApproxPruningConfig& config,
+        V0QueryMetrics* metrics,
+        const EdgeQuantV0ApproxQueryContext& query_context,
+        const EdgeQuantV0QueryContext* reference_context,
+        const EdgeQuantV0Metadata& metadata) const {
+        return searchKnnInternal<
+            true, retry_enabled, gate_aware_prefetch,
+            collect_v0_metrics>(
+                query_data,
+                k,
+                nullptr
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+                , nullptr
+#endif
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+                , reference_context
+                , metrics
+                , false
+                , &config
+                , &query_context
+                , &metadata
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+                , nullptr
+                , 0U
+#endif
+#endif
+            );
+    }
+
     std::priority_queue<std::pair<dist_t, labeltype > >
     searchKnnV0Approx(
         const void *query_data,
@@ -2174,27 +2393,78 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 "V0 approximate pruning does not yet support filters or deleted elements");
         }
         requireUsableEdgeQuantV0Metadata();
-        const EdgeQuantV0QueryContext query_context(
+        const EdgeQuantV0Metadata& metadata =
+            getEdgeQuantV0Metadata();
+        const EdgeQuantV0ApproxQueryContext query_context(
             static_cast<const float*>(query_data),
-            getEdgeQuantV0Metadata().view());
-        return searchKnnInternal<true>(
-            query_data,
-            k,
-            nullptr
-#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
-            , nullptr
-#endif
-#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
-            , &query_context
-            , active_metrics
-            , false
-            , &config
-#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
-            , nullptr
-            , 0U
-#endif
-#endif
-        );
+            metadata.header(),
+            metadata.nativeCodebookData());
+        const EdgeQuantV0QueryContext reference_context(
+            static_cast<const float*>(query_data), metadata.view());
+        const bool gate_aware = config.prefetch_policy ==
+            V0ApproxPrefetchPolicy::GateAware;
+        if (config.retry_enabled) {
+            if (gate_aware) {
+                return searchKnnV0ApproxConfigured<true, true, true>(
+                    query_data, k, config, active_metrics,
+                    query_context, &reference_context, metadata);
+            }
+            return searchKnnV0ApproxConfigured<true, false, true>(
+                query_data, k, config, active_metrics,
+                query_context, &reference_context, metadata);
+        }
+        if (gate_aware) {
+            return searchKnnV0ApproxConfigured<false, true, true>(
+                query_data, k, config, active_metrics,
+                query_context, &reference_context, metadata);
+        }
+        return searchKnnV0ApproxConfigured<false, false, true>(
+            query_data, k, config, active_metrics,
+            query_context, &reference_context, metadata);
+    }
+
+    // Metrics-free production candidate.  Detailed counters are collected by
+    // a separate reference run so the compiler can remove their hot-loop
+    // updates from throughput measurements.
+    std::priority_queue<std::pair<dist_t, labeltype > >
+    searchKnnV0ApproxFast(
+        const void* query_data,
+        size_t k,
+        const V0ApproxPruningConfig& config) const {
+        if (!config.valid()) {
+            throw std::invalid_argument(
+                "V0 approximate beta must be finite and >= 1");
+        }
+        if (num_deleted_ != 0U) {
+            throw std::invalid_argument(
+                "V0 approximate pruning does not support deleted elements");
+        }
+        requireUsableEdgeQuantV0Metadata();
+        const EdgeQuantV0Metadata& metadata =
+            getEdgeQuantV0Metadata();
+        const EdgeQuantV0ApproxQueryContext query_context(
+            static_cast<const float*>(query_data),
+            metadata.header(), metadata.nativeCodebookData());
+        const bool gate_aware = config.prefetch_policy ==
+            V0ApproxPrefetchPolicy::GateAware;
+        if (config.retry_enabled) {
+            if (gate_aware) {
+                return searchKnnV0ApproxConfigured<true, true, false>(
+                    query_data, k, config, nullptr,
+                    query_context, nullptr, metadata);
+            }
+            return searchKnnV0ApproxConfigured<true, false, false>(
+                query_data, k, config, nullptr,
+                query_context, nullptr, metadata);
+        }
+        if (gate_aware) {
+            return searchKnnV0ApproxConfigured<false, true, false>(
+                query_data, k, config, nullptr,
+                query_context, nullptr, metadata);
+        }
+        return searchKnnV0ApproxConfigured<false, false, false>(
+            query_data, k, config, nullptr,
+            query_context, nullptr, metadata);
     }
 #endif
 #endif

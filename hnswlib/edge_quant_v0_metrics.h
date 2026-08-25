@@ -6,9 +6,16 @@
 
 namespace hnswlib {
 
+enum class V0ApproxPrefetchPolicy : uint8_t {
+    LegacyVector = 0U,
+    GateAware = 1U
+};
+
 struct V0ApproxPruningConfig {
     double beta = 1.0;
     bool retry_enabled = true;
+    V0ApproxPrefetchPolicy prefetch_policy =
+        V0ApproxPrefetchPolicy::LegacyVector;
 
     bool valid() const {
         return std::isfinite(beta) && beta >= 1.0;
@@ -40,6 +47,15 @@ struct V0QueryMetrics {
     uint64_t approx_retry_inserted_result = 0;
     uint64_t approx_estimator_fallback = 0;
     uint64_t approx_state_bytes = 0;
+    uint64_t fast_reference_valid_pairs = 0;
+    uint64_t fast_reference_status_disagreement = 0;
+    uint64_t fast_reference_decision_disagreement = 0;
+    uint64_t fast_reference_near_threshold_pairs = 0;
+    uint64_t fast_reference_near_threshold_disagreement = 0;
+    double fast_reference_absolute_difference_sum = 0.0;
+    double fast_reference_absolute_difference_max = 0.0;
+    double fast_reference_relative_difference_sum = 0.0;
+    double fast_reference_relative_difference_max = 0.0;
 
     void reset() {
         *this = V0QueryMetrics();

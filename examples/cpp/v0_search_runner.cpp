@@ -105,6 +105,15 @@ struct Totals {
     uint64_t approx_retry_inserted_result = 0;
     uint64_t approx_estimator_fallback = 0;
     uint64_t approx_state_bytes_max = 0;
+    uint64_t fast_reference_valid_pairs = 0;
+    uint64_t fast_reference_status_disagreement = 0;
+    uint64_t fast_reference_decision_disagreement = 0;
+    uint64_t fast_reference_near_threshold_pairs = 0;
+    uint64_t fast_reference_near_threshold_disagreement = 0;
+    double fast_reference_absolute_difference_sum = 0.0;
+    double fast_reference_absolute_difference_max = 0.0;
+    double fast_reference_relative_difference_sum = 0.0;
+    double fast_reference_relative_difference_max = 0.0;
     double baseline_recall_sum = 0.0;
     double v0_recall_sum = 0.0;
     double recall_loss_sum = 0.0;
@@ -957,6 +966,26 @@ void addMetrics(
     totals.approx_state_bytes_max = std::max(
         totals.approx_state_bytes_max,
         metrics.approx_state_bytes);
+    totals.fast_reference_valid_pairs +=
+        metrics.fast_reference_valid_pairs;
+    totals.fast_reference_status_disagreement +=
+        metrics.fast_reference_status_disagreement;
+    totals.fast_reference_decision_disagreement +=
+        metrics.fast_reference_decision_disagreement;
+    totals.fast_reference_near_threshold_pairs +=
+        metrics.fast_reference_near_threshold_pairs;
+    totals.fast_reference_near_threshold_disagreement +=
+        metrics.fast_reference_near_threshold_disagreement;
+    totals.fast_reference_absolute_difference_sum +=
+        metrics.fast_reference_absolute_difference_sum;
+    totals.fast_reference_absolute_difference_max = std::max(
+        totals.fast_reference_absolute_difference_max,
+        metrics.fast_reference_absolute_difference_max);
+    totals.fast_reference_relative_difference_sum +=
+        metrics.fast_reference_relative_difference_sum;
+    totals.fast_reference_relative_difference_max = std::max(
+        totals.fast_reference_relative_difference_max,
+        metrics.fast_reference_relative_difference_max);
 }
 
 void writeMetadata(
@@ -1202,7 +1231,29 @@ bool writeSummary(
         << "  \"approx_estimator_fallback\": "
         << totals.approx_estimator_fallback << ",\n"
         << "  \"approx_state_bytes_max\": "
-        << totals.approx_state_bytes_max << "\n"
+        << totals.approx_state_bytes_max << ",\n"
+        << "  \"fast_reference_valid_pairs\": "
+        << totals.fast_reference_valid_pairs << ",\n"
+        << "  \"fast_reference_status_disagreement\": "
+        << totals.fast_reference_status_disagreement << ",\n"
+        << "  \"fast_reference_decision_disagreement\": "
+        << totals.fast_reference_decision_disagreement << ",\n"
+        << "  \"fast_reference_near_threshold_pairs\": "
+        << totals.fast_reference_near_threshold_pairs << ",\n"
+        << "  \"fast_reference_near_threshold_disagreement\": "
+        << totals.fast_reference_near_threshold_disagreement << ",\n"
+        << "  \"fast_reference_absolute_difference_mean\": "
+        << (totals.fast_reference_valid_pairs == 0U ? 0.0 :
+            totals.fast_reference_absolute_difference_sum /
+                totals.fast_reference_valid_pairs) << ",\n"
+        << "  \"fast_reference_absolute_difference_max\": "
+        << totals.fast_reference_absolute_difference_max << ",\n"
+        << "  \"fast_reference_relative_difference_mean\": "
+        << (totals.fast_reference_valid_pairs == 0U ? 0.0 :
+            totals.fast_reference_relative_difference_sum /
+                totals.fast_reference_valid_pairs) << ",\n"
+        << "  \"fast_reference_relative_difference_max\": "
+        << totals.fast_reference_relative_difference_max << "\n"
         << "}\n";
     return valid;
 }

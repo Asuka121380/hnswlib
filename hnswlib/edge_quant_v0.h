@@ -270,6 +270,81 @@ class V0QueryLut {
     std::vector<float> table_;
 };
 
+// Approximate-pruning-only LUT.  The sidecar has already been validated and
+// its codebook materialized in native float format, so this path deliberately
+// performs ordinary arithmetic without strict-bound directed rounding.
+class V0ApproxQueryLut {
+ public:
+    V0ApproxQueryLut(
+        const float* query,
+        const V0SidecarHeader& header,
+        const float* native_codebook)
+        : dimension_(header.dimension),
+          pq_m_(header.pq_m),
+          pq_ksub_(header.pq_ksub),
+          pq_dsub_(header.pq_dsub) {
+        if (query == NULL || native_codebook == NULL ||
+            dimension_ == 0U || pq_m_ == 0U || pq_ksub_ == 0U ||
+            pq_ksub_ > 256U || pq_dsub_ == 0U ||
+            header.pq_code_size != pq_m_ ||
+            static_cast<uint64_t>(pq_m_) * pq_dsub_ != dimension_) {
+            throw std::invalid_argument(
+                "V0 raw_fast_v1 received an invalid LUT contract");
+        }
+
+        const size_t table_size =
+            static_cast<size_t>(pq_m_) * pq_ksub_;
+        table_.resize(table_size);
+        for (uint32_t subquantizer = 0U;
+             subquantizer < pq_m_; ++subquantizer) {
+            const float* query_subvector = query +
+                static_cast<size_t>(subquantizer) * pq_dsub_;
+            for (uint32_t centroid = 0U;
+                 centroid < pq_ksub_; ++centroid) {
+                const float* centroid_subvector = native_codebook +
+                    (static_cast<size_t>(subquantizer) * pq_ksub_ +
+                     centroid) * pq_dsub_;
+                float dot = 0.0f;
+                for (uint32_t coordinate = 0U;
+                     coordinate < pq_dsub_; ++coordinate) {
+                    dot += query_subvector[coordinate] *
+                        centroid_subvector[coordinate];
+                }
+                if (!std::isfinite(static_cast<double>(dot))) {
+                    throw std::runtime_error(
+                        "V0 raw_fast_v1 LUT contains a non-finite value");
+                }
+                table_[static_cast<size_t>(subquantizer) * pq_ksub_ +
+                       centroid] = dot;
+            }
+        }
+    }
+
+    double innerProductUnchecked(
+        const V0EdgeRecordView& edge) const {
+        const uint8_t* code = edge.codeDataUnchecked();
+        float result = 0.0f;
+        for (uint32_t subquantizer = 0U;
+             subquantizer < pq_m_; ++subquantizer) {
+            result += table_[
+                static_cast<size_t>(subquantizer) * pq_ksub_ +
+                code[subquantizer]];
+        }
+        return static_cast<double>(result);
+    }
+
+    size_t tableBytes() const {
+        return table_.size() * sizeof(float);
+    }
+
+ private:
+    uint32_t dimension_;
+    uint32_t pq_m_;
+    uint32_t pq_ksub_;
+    uint32_t pq_dsub_;
+    std::vector<float> table_;
+};
+
 enum class V0BoundStatus : uint8_t {
     Valid = 0U,
     ExactOnly = 1U,
@@ -354,6 +429,73 @@ struct V0RawEstimateResult {
     bool requiresExactFallback() const {
         return !valid();
     }
+};
+
+// raw_fast_v1 intentionally has different low-bit numerical semantics from
+// the strict-derived reference result.  It is an approximate gate and must be
+// recalibrated before performance claims are made.
+class EdgeQuantV0ApproxQueryContext {
+ public:
+    EdgeQuantV0ApproxQueryContext(
+        const float* query,
+        const V0SidecarHeader& header,
+        const float* native_codebook)
+        : lut_(query, header, native_codebook) {}
+
+    V0RawEstimateResult evaluateRawFast(
+        const V0EdgeRecordView& edge,
+        double exact_current_squared_distance) const {
+        V0RawEstimateResult result;
+        if (!std::isfinite(exact_current_squared_distance) ||
+            exact_current_squared_distance < 0.0) {
+            result.status = V0BoundStatus::InvalidCurrentDistance;
+            return result;
+        }
+
+        const uint8_t flags = edge.flags();
+        if ((flags & V0_RESERVED_INVALID) != 0U) {
+            result.status = V0BoundStatus::ReservedInvalid;
+            return result;
+        }
+        if ((flags & V0_ZERO_LENGTH_EDGE) != 0U) {
+            result.status = V0BoundStatus::ZeroLength;
+            return result;
+        }
+        if ((flags & V0_EDGE_EXACT_ONLY) != 0U) {
+            result.status = V0BoundStatus::ExactOnly;
+            return result;
+        }
+
+        const double length = edge.edgeLengthNativeUnchecked();
+        const double anchor = edge.anchorProjectionNativeUnchecked();
+        if (!std::isfinite(length) || length <= 0.0 ||
+            !std::isfinite(anchor)) {
+            result.status = V0BoundStatus::InvalidEdgeMetadata;
+            return result;
+        }
+
+        const double query_inner_product =
+            lut_.innerProductUnchecked(edge);
+        const double residual_inner_product =
+            query_inner_product - anchor;
+        const double approximate_squared_distance =
+            exact_current_squared_distance + length * length -
+            2.0 * length * residual_inner_product;
+        if (!std::isfinite(approximate_squared_distance)) {
+            result.status = V0BoundStatus::NumericFailure;
+            return result;
+        }
+
+        result.status = V0BoundStatus::Valid;
+        result.approximate_squared_distance =
+            approximate_squared_distance;
+        return result;
+    }
+
+    size_t lutBytes() const { return lut_.tableBytes(); }
+
+ private:
+    V0ApproxQueryLut lut_;
 };
 
 // Per-query state only. It owns no index or sidecar storage and therefore

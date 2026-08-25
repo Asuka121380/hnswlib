@@ -152,12 +152,19 @@ void testApproximatePruningAndRetryStateMachine() {
     no_retry.retry_enabled = false;
     hnswlib::V0ApproxPruningConfig retry = no_retry;
     retry.retry_enabled = true;
+    hnswlib::V0ApproxPruningConfig gate_no_retry = no_retry;
+    gate_no_retry.prefetch_policy =
+        hnswlib::V0ApproxPrefetchPolicy::GateAware;
+    hnswlib::V0ApproxPruningConfig gate_retry = retry;
+    gate_retry.prefetch_policy =
+        hnswlib::V0ApproxPrefetchPolicy::GateAware;
     hnswlib::V0ApproxPruningConfig disabled = retry;
     disabled.beta = std::numeric_limits<double>::max();
 
     uint64_t total_first_pruned = 0U;
     uint64_t total_retry = 0U;
     uint64_t total_retry_inserted = 0U;
+    uint64_t total_reference_pairs = 0U;
     for (size_t query_id = 0U;
          query_id < node_count;
          ++query_id) {
@@ -170,6 +177,8 @@ void testApproximatePruningAndRetryStateMachine() {
         hnswlib::V0QueryMetrics no_retry_metrics;
         hnswlib::V0QueryMetrics retry_metrics;
         hnswlib::V0QueryMetrics disabled_metrics;
+        hnswlib::V0QueryMetrics gate_no_retry_metrics;
+        hnswlib::V0QueryMetrics gate_retry_metrics;
         const std::priority_queue<
             std::pair<float, hnswlib::labeltype> > without_retry =
                 index.searchKnnV0Approx(
@@ -182,6 +191,26 @@ void testApproximatePruningAndRetryStateMachine() {
             std::pair<float, hnswlib::labeltype> > effectively_disabled =
                 index.searchKnnV0Approx(
                     query, k, disabled, &disabled_metrics);
+        const std::priority_queue<
+            std::pair<float, hnswlib::labeltype> > gate_metrics_without_retry =
+                index.searchKnnV0Approx(
+                    query, k, gate_no_retry, &gate_no_retry_metrics);
+        const std::priority_queue<
+            std::pair<float, hnswlib::labeltype> > gate_metrics_with_retry =
+                index.searchKnnV0Approx(
+                    query, k, gate_retry, &gate_retry_metrics);
+        const std::priority_queue<
+            std::pair<float, hnswlib::labeltype> > fast_without_retry =
+                index.searchKnnV0ApproxFast(query, k, no_retry);
+        const std::priority_queue<
+            std::pair<float, hnswlib::labeltype> > fast_with_retry =
+                index.searchKnnV0ApproxFast(query, k, retry);
+        const std::priority_queue<
+            std::pair<float, hnswlib::labeltype> > gate_without_retry =
+                index.searchKnnV0ApproxFast(query, k, gate_no_retry);
+        const std::priority_queue<
+            std::pair<float, hnswlib::labeltype> > gate_with_retry =
+                index.searchKnnV0ApproxFast(query, k, gate_retry);
 
         v0_test::require(
             sameQueue(baseline, effectively_disabled),
@@ -190,6 +219,26 @@ void testApproximatePruningAndRetryStateMachine() {
             sameQueue(baseline, without_retry) &&
                 sameQueue(baseline, with_retry),
             "exact-direction fixture changed results under active pruning");
+        v0_test::require(
+            sameQueue(without_retry, fast_without_retry) &&
+                sameQueue(with_retry, fast_with_retry),
+            "metrics-free fast path changed active results");
+        v0_test::require(
+            sameQueue(fast_without_retry, gate_without_retry) &&
+                sameQueue(fast_with_retry, gate_with_retry),
+            "gate-aware prefetch changed active results");
+        v0_test::require(
+            sameQueue(without_retry, gate_metrics_without_retry) &&
+                sameQueue(with_retry, gate_metrics_with_retry) &&
+                no_retry_metrics.exact_distance_computed ==
+                    gate_no_retry_metrics.exact_distance_computed &&
+                retry_metrics.exact_distance_computed ==
+                    gate_retry_metrics.exact_distance_computed &&
+                no_retry_metrics.approx_first_pruned ==
+                    gate_no_retry_metrics.approx_first_pruned &&
+                retry_metrics.approx_retry_exact_distance ==
+                    gate_retry_metrics.approx_retry_exact_distance,
+            "prefetch policy changed top-k or DCO accounting");
         v0_test::require(
             retry_metrics.approx_retry_exact_distance ==
                 retry_metrics.approx_retry_encountered,
@@ -216,9 +265,19 @@ void testApproximatePruningAndRetryStateMachine() {
             no_retry_metrics.bound_evaluated == 0U &&
                 retry_metrics.bound_evaluated == 0U &&
                 disabled_metrics.bound_evaluated == 0U,
-            "active raw mode unexpectedly executed the strict evaluator");
+            "active raw mode unexpectedly used the strict pruning path");
         v0_test::require(
-            retry_metrics.approx_state_bytes == node_count,
+            std::isfinite(
+                    no_retry_metrics.fast_reference_absolute_difference_max) &&
+                std::isfinite(
+                    no_retry_metrics.fast_reference_relative_difference_max),
+            "metrics build did not compare raw_fast_v1 with its reference");
+        v0_test::require(
+            no_retry_metrics.approx_state_bytes == 0U,
+            "no-retry path unexpectedly allocated retry state");
+        v0_test::require(
+            retry_metrics.approx_state_bytes ==
+                node_count * sizeof(hnswlib::vl_type),
             "active state memory was not reported");
         v0_test::require(
             disabled_metrics.approx_first_pruned == 0U &&
@@ -231,6 +290,8 @@ void testApproximatePruningAndRetryStateMachine() {
         total_retry += retry_metrics.approx_retry_exact_distance;
         total_retry_inserted +=
             retry_metrics.approx_retry_inserted_candidate;
+        total_reference_pairs +=
+            no_retry_metrics.fast_reference_valid_pairs;
     }
 
     v0_test::require(
@@ -242,6 +303,9 @@ void testApproximatePruningAndRetryStateMachine() {
     v0_test::require(
         total_retry_inserted <= total_retry,
         "more retry candidates were inserted than evaluated");
+    v0_test::require(
+        total_reference_pairs > 0U,
+        "metrics build collected no fast/reference comparison pairs");
 
     hnswlib::V0ApproxPruningConfig invalid;
     invalid.beta = std::numeric_limits<double>::quiet_NaN();

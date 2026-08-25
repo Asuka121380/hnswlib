@@ -7,11 +7,42 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "edge_quant_v0_graph_access.h"
 #include "edge_quant_v0_io.h"
 
 namespace hnswlib {
+
+class V0FastEdgeRecordSpan {
+ public:
+    V0FastEdgeRecordSpan()
+        : base_(NULL), degree_(0U), stride_(0U), header_(NULL) {}
+
+    V0FastEdgeRecordSpan(
+        const uint8_t* base,
+        size_t degree,
+        uint32_t stride,
+        const V0SidecarHeader* header)
+        : base_(base), degree_(degree), stride_(stride), header_(header) {}
+
+    size_t size() const { return degree_; }
+
+    V0EdgeRecordView edgeUnchecked(size_t slot) const {
+        return V0EdgeRecordView(
+            base_ + slot * static_cast<size_t>(stride_), *header_);
+    }
+
+    const uint8_t* recordDataUnchecked(size_t slot) const {
+        return base_ + slot * static_cast<size_t>(stride_);
+    }
+
+ private:
+    const uint8_t* base_;
+    size_t degree_;
+    uint32_t stride_;
+    const V0SidecarHeader* header_;
+};
 
 // Immutable query-time binding for one validated V0 sidecar. The owned bytes
 // keep every view and edge record alive for the lifetime of this object.
@@ -27,6 +58,15 @@ class EdgeQuantV0Metadata {
 
     size_t storageBytes() const {
         return view_.fileSize();
+    }
+
+    const float* nativeCodebookData() const {
+        return native_codebook_.empty() ? NULL :
+            native_codebook_.data();
+    }
+
+    size_t nativeCodebookSize() const {
+        return native_codebook_.size();
     }
 
     uint64_t edgeIndex(tableint source_id, size_t layer0_slot) const {
@@ -57,11 +97,49 @@ class EdgeQuantV0Metadata {
             edgeIndex(source_id, layer0_slot)));
     }
 
+    V0FastEdgeRecordSpan fastEdgeSpan(
+        tableint source_id,
+        size_t expected_degree) const {
+        if (static_cast<uint64_t>(source_id) >= header().node_count) {
+            throw std::out_of_range(
+                "V0 fast metadata source node is out of range");
+        }
+        const uint64_t first =
+            view_.nodeOffsetNativeUnchecked(source_id);
+        const uint64_t last = view_.nodeOffsetNativeUnchecked(
+            static_cast<size_t>(source_id) + 1U);
+        if (last < first || last - first != expected_degree) {
+            throw std::runtime_error(
+                "V0 fast metadata degree does not match graph adjacency");
+        }
+        return V0FastEdgeRecordSpan(
+            view_.edgeRecordDataUnchecked(static_cast<size_t>(first)),
+            expected_degree,
+            header().edge_record_stride,
+            &header());
+    }
+
  private:
     explicit EdgeQuantV0Metadata(
         std::shared_ptr<const V0OwnedSidecar> storage)
         : storage_(std::move(storage)),
-          view_(requireStorage(storage_).view()) {}
+          view_(requireStorage(storage_).view()),
+          native_codebook_(materializeNativeCodebook(view_)) {}
+
+    static std::vector<float> materializeNativeCodebook(
+        const V0SidecarView& view) {
+        if (!edge_quant_v0_detail::nativeIsLittleEndian()) {
+            throw std::runtime_error(
+                "V0 raw_fast_v1 requires a little-endian host");
+        }
+        const size_t count = static_cast<size_t>(
+            view.header().codebook.size / sizeof(float));
+        std::vector<float> codebook(count);
+        for (size_t i = 0U; i < count; ++i) {
+            codebook[i] = view.codebookCentroid(i);
+        }
+        return codebook;
+    }
 
     static const V0OwnedSidecar& requireStorage(
         const std::shared_ptr<const V0OwnedSidecar>& storage) {
@@ -81,6 +159,7 @@ class EdgeQuantV0Metadata {
 
     std::shared_ptr<const V0OwnedSidecar> storage_;
     V0SidecarView view_;
+    std::vector<float> native_codebook_;
 };
 
 inline std::shared_ptr<const EdgeQuantV0Metadata>
