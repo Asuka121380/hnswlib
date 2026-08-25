@@ -76,6 +76,42 @@ class PerformanceReadyInfrastructureTest(unittest.TestCase):
         ])
         self.assertEqual(completed.returncode, 0)
 
+    def test_calibration_summary(self) -> None:
+        summary = {
+            "approx_beta": 1.0,
+            "status": "valid",
+            "query_count": 3,
+            "mean_baseline_recall_at_k": 0.9,
+            "mean_v0_recall_at_k": 0.9,
+            "mean_recall_loss": 0.0,
+            "recall_loss_queries": 0,
+            "catastrophic_recall_loss_queries": 0,
+            "baseline_relative_exact_dco_reduction": 0.2,
+            "exact_distance_saved": 10,
+            "approx_first_pruned": 10,
+            "approx_retry_exact_distance": 0,
+            "fast_reference_decision_disagreement": 0,
+            "fast_reference_near_threshold_disagreement": 0,
+            "fast_reference_relative_difference_max": 1e-7,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for mode in ("approx-no-retry", "approx-retry"):
+                run = root / "runs" / f"{mode}-beta1.00"
+                run.mkdir(parents=True)
+                (run / "summary.json").write_text(
+                    json.dumps(summary), encoding="utf-8")
+            output = root / "calibration.csv"
+            completed = subprocess.run([
+                sys.executable,
+                str(SCRIPTS / "summarize_calibration.py"),
+                "--run-root", str(root),
+                "--expected-count", "2",
+                "--output", str(output),
+            ])
+            self.assertEqual(completed.returncode, 0)
+            self.assertEqual(len(output.read_text().splitlines()), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

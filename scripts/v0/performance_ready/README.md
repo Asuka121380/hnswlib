@@ -47,3 +47,8 @@ schedule machinery.
 plan. Combine its JSON with an active metrics `summary.json` using
 `evaluate_break_even.py`; the script applies the frozen 25% safety-headroom
 gate and exits nonzero when the estimated overhead exceeds the allowance.
+
+Submit dense-beta calibration through `run_calibration.slurm`. It requires a
+new `RUN_ROOT` and the exact `EXPECTED_COMMIT`, supports restart by reusing only
+completed run directories, and calls `summarize_calibration.py` after all
+no-retry/retry configurations finish.
