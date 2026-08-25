@@ -51,4 +51,6 @@ gate and exits nonzero when the estimated overhead exceeds the allowance.
 Submit dense-beta calibration through `run_calibration.slurm`. It requires a
 new `RUN_ROOT` and the exact `EXPECTED_COMMIT`, supports restart by reusing only
 completed run directories, and calls `summarize_calibration.py` after all
-no-retry/retry configurations finish.
+no-retry/retry configurations finish. Set `RUN_ROLE=validation` or
+`RUN_ROLE=heldout` for later frozen splits so run IDs, summaries, and completion
+markers preserve their scientific role.

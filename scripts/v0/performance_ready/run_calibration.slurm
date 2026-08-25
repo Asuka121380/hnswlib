@@ -25,7 +25,16 @@ sidecar_path="${SIDECAR_PATH:-$HOME/IndividualProject/results/v0_offline/gist1m/
 query_start="${QUERY_START:-0}"
 query_count="${QUERY_COUNT:-300}"
 ef_search="${EF_SEARCH:-200}"
+run_role="${RUN_ROLE:-calibration}"
 betas_csv="${BETAS:-1.00,1.05,1.10,1.15,1.20,1.25,1.30,1.35,1.40,1.425,1.45,1.475,1.50,1.525,1.55,1.60,1.70,1.80,2.00}"
+
+case "$run_role" in
+  calibration|validation|heldout) ;;
+  *)
+    echo "RUN_ROLE must be calibration, validation, or heldout" >&2
+    exit 2
+    ;;
+esac
 
 cd "$repo_root"
 
@@ -65,6 +74,7 @@ echo "job=${SLURM_JOB_ID:-unavailable}"
 echo "start=$(date --iso-8601=seconds)"
 echo "commit=$actual_commit branch=$branch"
 echo "query_start=$query_start query_count=$query_count ef_search=$ef_search"
+echo "run_role=$run_role"
 echo "betas=$betas_csv"
 cmake --version | head -n 1
 g++ --version | head -n 1
@@ -101,7 +111,7 @@ for beta in "${betas[@]}"; do
       --sidecar-path "$sidecar_path" \
       --output-dir "$output_dir" \
       --mode "$mode" \
-      --run-id "raw-fast-v1-calibration-q${query_start}-n${query_count}-${label}" \
+      --run-id "raw-fast-v1-${run_role}-q${query_start}-n${query_count}-${label}" \
       --query-start "$query_start" \
       --query-count "$query_count" \
       --k 10 \
@@ -119,7 +129,8 @@ expected_count=$(( ${#betas[@]} * 2 ))
   scripts/v0/performance_ready/summarize_calibration.py \
   --run-root "$RUN_ROOT" \
   --expected-count "$expected_count" \
-  --output "$RUN_ROOT/calibration_summary.csv"
+  --role "$run_role" \
+  --output "$RUN_ROOT/${run_role}_summary.csv"
 
 echo "end=$(date --iso-8601=seconds)"
-echo "v0_fast_calibration_ok"
+echo "v0_fast_${run_role}_ok"

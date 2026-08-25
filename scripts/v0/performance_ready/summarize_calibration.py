@@ -23,6 +23,11 @@ def main() -> int:
     parser.add_argument("--run-root", required=True, type=Path)
     parser.add_argument("--expected-count", required=True, type=int)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--role",
+        choices=("calibration", "validation", "heldout"),
+        default="calibration",
+    )
     args = parser.parse_args()
 
     rows: list[dict[str, object]] = []
@@ -77,7 +82,7 @@ def main() -> int:
             f"dco={float(row['dco_reduction']):.3%} "
             f"cat={row['catastrophic_queries']} "
             f"disagree={row['decision_disagreement']}")
-    print(f"calibration_complete rows={len(rows)} output={args.output}")
+    print(f"{args.role}_complete rows={len(rows)} output={args.output}")
     return 0
 
 
