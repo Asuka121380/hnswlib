@@ -401,6 +401,15 @@ if(HNSWLIB_EXAMPLES)
           v0_performance_ready_test
           PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         )
+        add_test(
+          NAME v0_qps_pipeline_test
+          COMMAND ${PYTHON_EXECUTABLE}
+                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/python/v0_qps_pipeline_test.py
+        )
+        set_tests_properties(
+          v0_qps_pipeline_test
+          PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        )
       endif()
 
       if(HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING)

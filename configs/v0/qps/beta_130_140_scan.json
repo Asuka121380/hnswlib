@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "experiment_name": "ef500-beta130-140-scan",
+  "experiment_role": "exploratory",
+  "dataset": "gist1m",
+  "dimension": 960,
+  "query_start": 0,
+  "query_count": 1000,
+  "k": 10,
+  "ef_search": 500,
+  "warmup_queries": 100,
+  "within_process_repeats": 3,
+  "blocks": 3,
+  "seed": 20260830,
+  "include_baseline": true,
+  "betas": [1.30, 1.325, 1.35, 1.375, 1.40],
+  "modes": ["approx-no-retry", "approx-retry"],
+  "prefetches": ["legacy", "gate"]
+}

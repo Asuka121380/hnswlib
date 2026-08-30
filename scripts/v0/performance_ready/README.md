@@ -96,3 +96,79 @@ speedup confidence intervals alongside Recall, exact-DCO reduction, retry,
 and latency percentiles. `qps/manifest.json` is updated atomically after each
 process and supports reuse of checksum-verified completed results if the QPS
 job must be resumed under the identical contract.
+
+## Configurable QPS experiments
+
+The frozen `tradeoff_matrix.sh` and `full_beta_tradeoff_matrix.sh` workflows
+remain the reproduction entry points for historical experiments. Do not pass
+environment overrides to those workflows: their repository-reviewed values
+are intentionally authoritative.
+
+Use `submit_qps_experiment.sh` for new targeted or exploratory QPS matrices.
+Its only algorithm-parameter source is a version-controlled JSON contract.
+The contract can define either a Cartesian product of `betas`, `modes`, and
+`prefetches`, or an explicit `cases` array; mixing the two forms is rejected.
+
+Validate the formal ef500 targeted contract without submitting a job:
+
+```text
+python scripts/v0/performance_ready/qps_config.py \
+  --config configs/v0/qps/ef500_targeted.json \
+  --resource-profile formal-exclusive
+
+bash scripts/v0/performance_ready/submit_qps_experiment.sh \
+  --config configs/v0/qps/ef500_targeted.json \
+  --resource-profile formal-exclusive \
+  --dry-run
+```
+
+The checked-in ef500 contract resolves to 12 active configurations plus one
+baseline in each of five blocks, for exactly 65 process-result JSON files.
+The submit preview prints `ef_search`, the active configuration count, blocks,
+the expected result count, resource profile, commit, build, and output root.
+Review that preview before removing `--dry-run`.
+
+Use the shared profile only for exploratory screening:
+
+```text
+bash scripts/v0/performance_ready/submit_qps_experiment.sh \
+  --config configs/v0/qps/beta_130_140_scan.json \
+  --resource-profile exploratory-shared \
+  --dry-run
+```
+
+`formal-exclusive` passes `--exclusive` to `sbatch`. The runner remains
+single-threaded, but the exclusive allocation prevents another job from
+contending for the node's caches and memory bandwidth. `exploratory-shared`
+passes `--oversubscribe`, requests one CPU, and must not be used for formal
+speedup claims or mixed with exclusive results. A configuration whose role is
+`formal` is rejected under the shared profile.
+
+For an actual submission, pass an explicit new root when a stable experiment
+name is useful:
+
+```text
+bash scripts/v0/performance_ready/submit_qps_experiment.sh \
+  --config configs/v0/qps/ef500_targeted.json \
+  --resource-profile formal-exclusive \
+  --run-root "$HOME/IndividualProject/results/v0_performance_ready/ef500-targeted-v1"
+```
+
+An interrupted experiment can be resumed only with the same configuration,
+resource profile, commit, runner, CMake cache, and input-file identities:
+
+```text
+bash scripts/v0/performance_ready/submit_qps_experiment.sh \
+  --config configs/v0/qps/ef500_targeted.json \
+  --resource-profile formal-exclusive \
+  --run-root "$HOME/IndividualProject/results/v0_performance_ready/ef500-targeted-v1" \
+  --resume
+```
+
+Every generic run root contains `requested_config.json`,
+`resolved_config.json`, `build_contract.json`, `manifest.json`, per-process
+JSON under `qps/`, and the generated `qps_summary.csv` and
+`qps_summary.json`. The manifest records the resolved contract hash, binary and
+CMake-cache checksums, input identities, Slurm allocation observations, the
+exact command for every process, and every result checksum. `COMPLETE` is
+written only after the expected result count has been verified.
