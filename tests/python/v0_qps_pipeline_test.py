@@ -73,6 +73,29 @@ class QpsConfigTest(unittest.TestCase):
         self.assertEqual(resolved["expected_result_count"], 63)
         self.assertFalse(resolved["exclusive"])
 
+    def test_retry_only_shared_scan_resolves_to_65_results(self) -> None:
+        _, resolved = self.module.load_config(
+            ROOT / "configs" / "v0" / "qps" /
+            "ef500_retry_beta130_140_shared.json",
+            "exploratory-shared",
+        )
+        self.assertEqual(resolved["ef_search"], 500)
+        self.assertEqual(resolved["blocks"], 5)
+        self.assertEqual(resolved["within_process_repeats"], 5)
+        self.assertEqual(resolved["expected_result_count"], 65)
+        self.assertEqual(
+            {case["mode"] for case in resolved["cases"]},
+            {"approx-retry"},
+        )
+        self.assertEqual(
+            {case["prefetch"] for case in resolved["cases"]},
+            {"legacy", "gate"},
+        )
+        self.assertEqual(
+            {case["beta"] for case in resolved["cases"]},
+            {"1.3", "1.32", "1.34", "1.36", "1.38", "1.4"},
+        )
+
     def test_frozen_full_matrix_maps_to_505_results(self) -> None:
         _, resolved = self.module.load_config(
             ROOT / "configs" / "v0" / "qps" / "examples" /
