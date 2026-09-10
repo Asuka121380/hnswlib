@@ -172,3 +172,54 @@ JSON under `qps/`, and the generated `qps_summary.csv` and
 CMake-cache checksums, input identities, Slurm allocation observations, the
 exact command for every process, and every result checksum. `COMPLETE` is
 written only after the expected result count has been verified.
+
+## Matched-recall experiment
+
+The new experiment grid fixes beta to 1.30, 1.35, 1.40, 1.45, 1.50, and
+1.55. Run the instrumented quality matrix separately so recall collection does
+not contaminate QPS:
+
+```text
+python scripts/v0/performance_ready/run_quality_matrix.py \
+  --config configs/v0/qps/matched_recall_quality_scan.json \
+  --runner BUILD/v0_search_runner --dataset-config DATASET.json \
+  --index-path INDEX --sidecar-path SIDECAR --run-root QUALITY_ROOT \
+  --experiment-commit COMMIT --git-branch BRANCH
+```
+
+On the cluster, `submit_quality_experiment.sh --config
+configs/v0/qps/matched_recall_quality_scan.json` submits the same operation and
+writes a resumable quality manifest.
+
+The quality scan includes all twelve ef500 beta/retry cases and baseline
+recall observations at ef 200, 250, ..., 500. It collapses prefetch-equivalent
+cases because prefetch must not change search results. Add finer ef values near
+the closest baseline observation when the coarse scan cannot match recall
+within 0.001.
+
+Freeze selected matches with candidates formatted as
+`BETA:MODE:PREFETCH:EF_SEARCH`:
+
+```text
+python scripts/v0/performance_ready/select_matched_recall.py \
+  --quality-summary QUALITY_ROOT/quality_summary.csv \
+  --template configs/v0/qps/ef500_matched_recall_full.json \
+  --candidate 1.30:approx-retry:legacy:500 \
+  --candidate 1.40:approx-retry:legacy:500 \
+  --candidate 1.50:approx-retry:legacy:500 \
+  --tolerance 0.001 --experiment-name matched-recall-formal-v1 \
+  --output-config MATCHED_CONFIG.json \
+  --selection-output MATCHED_SELECTION.json
+```
+
+The generated QPS contract gives every case its own `ef_search` and records
+the matching `baseline_id`. Submit it through `submit_qps_experiment.sh` with
+the `formal-exclusive` profile. Join the frozen quality selection and timing
+summary afterward:
+
+```text
+python scripts/v0/performance_ready/summarize_matched_recall.py \
+  --selection MATCHED_SELECTION.json \
+  --qps-summary QPS_ROOT/qps_summary.csv \
+  --output MATCHED_RECALL_SUMMARY.csv
+```

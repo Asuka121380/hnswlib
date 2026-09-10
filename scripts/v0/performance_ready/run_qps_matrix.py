@@ -236,7 +236,7 @@ def main() -> int:
                 "--query-start", str(resolved["query_start"]),
                 "--query-count", str(resolved["query_count"]),
                 "--k", str(resolved["k"]),
-                "--ef-search", str(resolved["ef_search"]),
+                "--ef-search", str(config["ef_search"]),
                 "--warmup-queries", str(resolved["warmup_queries"]),
                 "--repeats", str(resolved["within_process_repeats"]),
                 "--prefetch", (

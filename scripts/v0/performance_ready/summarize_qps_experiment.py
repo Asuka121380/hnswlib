@@ -23,8 +23,9 @@ T_975 = {
 }
 FIELDS = (
     "experiment_name", "experiment_role", "resource_profile", "exclusive",
-    "experiment_commit", "contract_sha256", "ef_search", "beta", "mode",
-    "prefetch", "query_start", "query_count", "blocks",
+    "experiment_commit", "contract_sha256", "configuration_id",
+    "baseline_id", "ef_search", "beta", "mode", "prefetch",
+    "query_start", "query_count", "blocks",
     "within_process_repeats", "qps_mean", "qps_ci_low", "qps_ci_high",
     "qps_speedup_mean", "qps_speedup_ci_low", "qps_speedup_ci_high",
     "latency_p50_ns_median", "latency_p95_ns_median",
@@ -74,7 +75,7 @@ def main() -> int:
             f"expected {expected} QPS results, found {len(completed)}")
 
     grouped: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
-    baseline_by_block: dict[int, float] = {}
+    baseline_by_id_block: dict[tuple[str, int], float] = {}
     seen_run_ids: set[str] = set()
     for item in completed:
         run_id = str(item["run_id"])
@@ -92,13 +93,23 @@ def main() -> int:
         grouped.setdefault(config_id, []).append((item, data))
         if config["method"] == "baseline":
             block = int(item["block"])
-            if block in baseline_by_block:
-                raise SystemExit(f"duplicate baseline in block {block}")
-            baseline_by_block[block] = float(data["qps"])
+            key = (config_id, block)
+            if key in baseline_by_id_block:
+                raise SystemExit(
+                    f"duplicate baseline {config_id} in block {block}")
+            baseline_by_id_block[key] = float(data["qps"])
 
     blocks = int(resolved["blocks"])
-    if resolved["include_baseline"] and len(baseline_by_block) != blocks:
-        raise SystemExit("one or more blocks lack a baseline result")
+    baseline_ids = {
+        str(observations[0][0]["config"]["id"])
+        for observations in grouped.values()
+        if observations[0][0]["config"]["method"] == "baseline"
+    }
+    for baseline_id in baseline_ids:
+        if any((baseline_id, block) not in baseline_by_id_block
+               for block in range(blocks)):
+            raise SystemExit(
+                f"one or more blocks lack baseline {baseline_id}")
     expected_configurations = int(resolved["configuration_count"])
     if len(grouped) != expected_configurations:
         raise SystemExit(
@@ -117,9 +128,11 @@ def main() -> int:
         qps_mean, qps_low, qps_high = confidence_interval(qps_values)
         if config["method"] == "baseline":
             speed_mean, speed_low, speed_high = 1.0, 1.0, 1.0
-        elif resolved["include_baseline"]:
+        elif config.get("baseline_id"):
+            baseline_id = str(config["baseline_id"])
             speedups = [
-                float(data["qps"]) / baseline_by_block[int(item["block"])]
+                float(data["qps"]) /
+                baseline_by_id_block[(baseline_id, int(item["block"]))]
                 for item, data in observations
             ]
             speed_mean, speed_low, speed_high = confidence_interval(speedups)
@@ -136,7 +149,9 @@ def main() -> int:
             "exclusive": resolved["exclusive"],
             "experiment_commit": contract["experiment_commit"],
             "contract_sha256": resolved["contract_sha256"],
-            "ef_search": resolved["ef_search"],
+            "configuration_id": config["id"],
+            "baseline_id": config.get("baseline_id") or "",
+            "ef_search": config["ef_search"],
             "beta": "" if config["beta"] is None else config["beta"],
             "mode": config["method"],
             "prefetch": config["prefetch"],

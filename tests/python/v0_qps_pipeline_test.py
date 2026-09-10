@@ -122,7 +122,6 @@ class QpsConfigTest(unittest.TestCase):
         requested["within_process_repeats"] = 5
         with self.assertRaises(self.module.ConfigError):
             self.module.resolve_config(requested, "exploratory-shared")
-
     def test_ambiguous_and_duplicate_cases_are_rejected(self) -> None:
         requested = exploratory_config()
         requested["betas"] = [1.3]
@@ -132,6 +131,31 @@ class QpsConfigTest(unittest.TestCase):
             self.module.resolve_config(requested, "exploratory-shared")
         requested = exploratory_config()
         requested["cases"].append(dict(requested["cases"][0]))
+        with self.assertRaises(self.module.ConfigError):
+            self.module.resolve_config(requested, "exploratory-shared")
+
+    def test_explicit_cases_support_independent_ef_and_pairing(self) -> None:
+        requested = exploratory_config()
+        requested["include_baseline"] = False
+        requested["cases"] = [
+            {"id": "baseline-ef380", "method": "baseline", "ef_search": 380},
+            {"id": "edgepq-ef500", "method": "approx-retry", "beta": 1.4,
+             "prefetch": "legacy", "ef_search": 500,
+             "baseline_id": "baseline-ef380"},
+        ]
+        resolved = self.module.resolve_config(requested, "exploratory-shared")
+        configs = self.module.configurations(resolved)
+        self.assertEqual([case["ef_search"] for case in configs], [380, 500])
+        self.assertEqual(configs[1]["baseline_id"], "baseline-ef380")
+
+    def test_unknown_baseline_reference_is_rejected(self) -> None:
+        requested = exploratory_config()
+        requested["include_baseline"] = False
+        requested["cases"] = [
+            {"method": "baseline", "ef_search": 380},
+            {"method": "approx-retry", "beta": 1.4, "prefetch": "legacy",
+             "ef_search": 500, "baseline_id": "missing"},
+        ]
         with self.assertRaises(self.module.ConfigError):
             self.module.resolve_config(requested, "exploratory-shared")
 
@@ -246,6 +270,120 @@ class QpsMatrixIntegrationTest(unittest.TestCase):
             with mock.patch.object(sys, "argv", arguments + ["--resume"]):
                 with self.assertRaises(SystemExit):
                     runner_module.main()
+
+
+class MatchedRecallPipelineTest(unittest.TestCase):
+    def test_quality_cases_collapse_prefetch(self) -> None:
+        config_module = load_module(
+            "qps_config_quality_tested", SCRIPTS / "qps_config.py")
+        quality_module = load_module(
+            "run_quality_matrix_tested", SCRIPTS / "run_quality_matrix.py")
+        requested = exploratory_config()
+        requested.pop("cases")
+        requested["betas"] = [1.3, 1.35]
+        requested["modes"] = ["approx-no-retry", "approx-retry"]
+        requested["prefetches"] = ["legacy", "gate"]
+        resolved = config_module.resolve_config(requested)
+        cases = quality_module.active_quality_cases(resolved)
+        self.assertEqual(len(cases), 4)
+        self.assertEqual({case["ef_search"] for case in cases}, {500})
+
+    def test_quality_matrix_writes_summary_without_runner_query_start(self) -> None:
+        quality_module = load_module(
+            "run_quality_matrix_integration_tested",
+            SCRIPTS / "run_quality_matrix.py")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("runner", "dataset.json", "index.bin", "sidecar.bin"):
+                (root / name).write_text(name, encoding="utf-8")
+            config = root / "config.json"
+            requested = exploratory_config()
+            requested["cases"] = [requested["cases"][0]]
+            config.write_text(json.dumps(requested), encoding="utf-8")
+            run_root = root / "quality-run"
+
+            def fake_run(command: list[str], check: bool):
+                del check
+                output_dir = Path(command[command.index("--output-dir") + 1])
+                output_dir.mkdir(parents=True)
+                (output_dir / "summary.json").write_text(json.dumps({
+                    "status": "valid", "query_count": 10,
+                    "mean_baseline_recall_at_k": .96,
+                    "mean_v0_recall_at_k": .95, "mean_recall_loss": .01,
+                    "recall_loss_queries": 1,
+                    "catastrophic_recall_loss_queries": 0,
+                    "baseline_relative_exact_dco_reduction": .5,
+                    "exact_distance_saved": 10, "approx_first_pruned": 11,
+                    "approx_retry_exact_distance": 1,
+                    "fast_reference_decision_disagreement": 0,
+                    "fast_reference_near_threshold_disagreement": 0,
+                    "fast_reference_relative_difference_max": 0,
+                }), encoding="utf-8")
+                return subprocess.CompletedProcess(command, 0)
+
+            with mock.patch.object(sys, "argv", [
+                    "run_quality_matrix.py", "--config", str(config),
+                    "--runner", str(root / "runner"), "--dataset-config",
+                    str(root / "dataset.json"), "--index-path",
+                    str(root / "index.bin"), "--sidecar-path",
+                    str(root / "sidecar.bin"), "--run-root", str(run_root),
+                    "--experiment-commit", "abc", "--git-branch", "test",
+                ]), mock.patch.object(
+                    quality_module.subprocess, "run", side_effect=fake_run):
+                self.assertEqual(quality_module.main(), 0)
+            with (run_root / "quality_summary.csv").open(
+                    encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows[0]["query_start"], "0")
+            self.assertEqual(rows[0]["v0_recall"], "0.95")
+
+    def test_selector_writes_valid_multi_ef_contract(self) -> None:
+        selector = load_module(
+            "select_matched_recall_tested",
+            SCRIPTS / "select_matched_recall.py")
+        config_module = load_module(
+            "qps_config_matched_tested", SCRIPTS / "qps_config.py")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            quality = root / "quality.csv"
+            fields = [
+                "ef_search", "beta", "mode", "baseline_recall", "v0_recall"
+            ]
+            with quality.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fields)
+                writer.writeheader()
+                writer.writerows([
+                    {"ef_search": 380, "beta": 1.55,
+                     "mode": "approx-retry", "baseline_recall": .9505,
+                     "v0_recall": .949},
+                    {"ef_search": 500, "beta": 1.40,
+                     "mode": "approx-retry", "baseline_recall": .965,
+                     "v0_recall": .950},
+                ])
+            template = root / "template.json"
+            requested = exploratory_config()
+            requested["experiment_role"] = "formal"
+            requested["blocks"] = 5
+            requested["within_process_repeats"] = 5
+            template.write_text(json.dumps(requested), encoding="utf-8")
+            output = root / "matched.json"
+            selection = root / "selection.json"
+            with mock.patch.object(sys, "argv", [
+                "select_matched_recall.py",
+                "--quality-summary", str(quality),
+                "--template", str(template),
+                "--candidate", "1.40:approx-retry:legacy:500",
+                "--tolerance", "0.001",
+                "--experiment-name", "matched-test",
+                "--output-config", str(output),
+                "--selection-output", str(selection),
+            ]):
+                self.assertEqual(selector.main(), 0)
+            resolved = config_module.load_config(
+                output, "formal-exclusive")[1]
+            configs = config_module.configurations(resolved)
+            self.assertEqual([case["ef_search"] for case in configs], [380, 500])
+            self.assertEqual(configs[1]["baseline_id"], configs[0]["id"])
 
 
 if __name__ == "__main__":

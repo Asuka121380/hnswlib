@@ -95,17 +95,33 @@ def canonical_beta(value: object) -> str:
     return format(numeric, ".15g")
 
 
-def configuration_id(case: dict[str, str]) -> str:
+def configuration_id(case: dict[str, Any], default_ef_search: int) -> str:
+    if case["method"] == "baseline":
+        return str(case.get("id") or f"baseline-ef{case['ef_search']}")
+    if case.get("id"):
+        return str(case["id"])
     beta = case["beta"].replace(".", "p").replace("-", "m")
-    return f"{case['mode']}-beta{beta}-{case['prefetch']}"
+    result = f"{case['method']}-beta{beta}-{case['prefetch']}"
+    if case["ef_search"] != default_ef_search:
+        result += f"-ef{case['ef_search']}"
+    return result
 
 
-def _resolve_cases(requested: dict[str, Any]) -> tuple[str, list[dict[str, str]]]:
+def _case_ef(raw_case: dict[str, Any], default: int, index: int) -> int:
+    value = raw_case.get("ef_search", default)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ConfigError(f"cases[{index}].ef_search must be an integer >= 1")
+    return value
+
+
+def _resolve_cases(
+    requested: dict[str, Any], default_ef_search: int, k: int,
+) -> tuple[str, list[dict[str, Any]]]:
     has_cases = "cases" in requested
     matrix_keys = MATRIX_KEYS.intersection(requested)
     if has_cases and matrix_keys:
         raise ConfigError("cases and betas/modes/prefetches are mutually exclusive")
-    cases: list[dict[str, str]] = []
+    cases: list[dict[str, Any]] = []
     if has_cases:
         raw_cases = requested["cases"]
         if not isinstance(raw_cases, list) or not raw_cases:
@@ -113,10 +129,47 @@ def _resolve_cases(requested: dict[str, Any]) -> tuple[str, list[dict[str, str]]
         for index, raw_case in enumerate(raw_cases):
             if not isinstance(raw_case, dict):
                 raise ConfigError(f"cases[{index}] must be an object")
-            if set(raw_case) != {"beta", "mode", "prefetch"}:
+            allowed = {
+                "id", "method", "mode", "beta", "prefetch", "ef_search",
+                "baseline_id",
+            }
+            unknown = set(raw_case) - allowed
+            if unknown:
                 raise ConfigError(
-                    f"cases[{index}] must contain only beta, mode, and prefetch")
-            mode = raw_case["mode"]
+                    f"unknown fields in cases[{index}]: " +
+                    ", ".join(sorted(unknown)))
+            if "method" in raw_case and "mode" in raw_case:
+                raise ConfigError(
+                    f"cases[{index}] cannot contain both method and mode")
+            method = raw_case.get("method", raw_case.get("mode"))
+            ef_search = _case_ef(raw_case, default_ef_search, index)
+            if ef_search < k:
+                raise ConfigError(f"cases[{index}].ef_search must be >= k")
+            raw_id = raw_case.get("id")
+            if raw_id is not None and (
+                    not isinstance(raw_id, str) or
+                    not NAME_PATTERN.fullmatch(raw_id)):
+                raise ConfigError(f"invalid cases[{index}].id")
+            if method == "baseline":
+                forbidden = {"beta", "prefetch", "baseline_id"}.intersection(raw_case)
+                if forbidden:
+                    raise ConfigError(
+                        f"baseline cases[{index}] cannot contain: " +
+                        ", ".join(sorted(forbidden)))
+                cases.append({
+                    "id": raw_id,
+                    "method": "baseline",
+                    "mode": "baseline",
+                    "beta": None,
+                    "prefetch": "none",
+                    "ef_search": ef_search,
+                    "baseline_id": None,
+                })
+                continue
+            mode = method
+            if "beta" not in raw_case or "prefetch" not in raw_case:
+                raise ConfigError(
+                    f"active cases[{index}] require beta and prefetch")
             prefetch = raw_case["prefetch"]
             if mode not in MODES:
                 raise ConfigError(f"unknown mode in cases[{index}]: {mode!r}")
@@ -125,8 +178,12 @@ def _resolve_cases(requested: dict[str, Any]) -> tuple[str, list[dict[str, str]]
                     f"unknown prefetch in cases[{index}]: {prefetch!r}")
             cases.append({
                 "beta": canonical_beta(raw_case["beta"]),
+                "method": mode,
                 "mode": mode,
                 "prefetch": prefetch,
+                "ef_search": ef_search,
+                "id": raw_id,
+                "baseline_id": raw_case.get("baseline_id"),
             })
         source = "explicit"
     else:
@@ -147,12 +204,12 @@ def _resolve_cases(requested: dict[str, Any]) -> tuple[str, list[dict[str, str]]
             for mode in modes:
                 for prefetch in prefetches:
                     cases.append({
-                        "beta": beta, "mode": mode, "prefetch": prefetch})
+                        "beta": beta, "method": mode, "prefetch": prefetch,
+                        "mode": mode,
+                        "ef_search": default_ef_search, "id": None,
+                        "baseline_id": "baseline",
+                    })
         source = "cartesian"
-    identities = [
-        (case["beta"], case["mode"], case["prefetch"]) for case in cases]
-    if len(set(identities)) != len(identities):
-        raise ConfigError("cases contains duplicate configurations")
     return source, cases
 
 
@@ -184,9 +241,46 @@ def resolve_config(
     include_baseline = requested.get("include_baseline", True)
     if not isinstance(include_baseline, bool):
         raise ConfigError("include_baseline must be boolean")
-    if role == "formal" and not include_baseline:
-        raise ConfigError("formal experiments require include_baseline=true")
-    case_source, cases = _resolve_cases(requested)
+    k = _integer(requested, "k", 10, minimum=1)
+    ef_search = _integer(requested, "ef_search", None, minimum=1)
+    if ef_search < k:
+        raise ConfigError("ef_search must be >= k")
+    case_source, cases = _resolve_cases(requested, ef_search, k)
+
+    if include_baseline:
+        baseline_ids = {"baseline"}
+    else:
+        baseline_ids = set()
+    for case in cases:
+        case["id"] = configuration_id(case, ef_search)
+        if case["method"] == "baseline":
+            baseline_ids.add(case["id"])
+    ids = [case["id"] for case in cases]
+    if include_baseline:
+        ids.append("baseline")
+    if len(ids) != len(set(ids)):
+        raise ConfigError("cases contains duplicate configuration IDs")
+    if role == "formal" and not baseline_ids:
+        raise ConfigError("formal experiments require at least one baseline")
+    for index, case in enumerate(cases):
+        if case["method"] == "baseline":
+            continue
+        baseline_id = case.get("baseline_id")
+        if baseline_id == "baseline" and not include_baseline:
+            baseline_id = None
+            case["baseline_id"] = None
+        if baseline_id is None:
+            if len(baseline_ids) == 1:
+                case["baseline_id"] = next(iter(baseline_ids))
+            elif not baseline_ids and role == "exploratory":
+                case["baseline_id"] = None
+            else:
+                raise ConfigError(
+                    f"cases[{index}] requires baseline_id when multiple baselines exist")
+        elif baseline_id not in baseline_ids:
+            raise ConfigError(
+                f"cases[{index}].baseline_id does not name a baseline: "
+                f"{baseline_id!r}")
     blocks = _integer(requested, "blocks", 5, minimum=1)
     repeats = _integer(
         requested, "within_process_repeats", 5, minimum=1)
@@ -194,10 +288,7 @@ def resolve_config(
         raise ConfigError(
             "formal experiments require blocks and within_process_repeats >= 5")
 
-    k = _integer(requested, "k", 10, minimum=1)
-    ef_search = _integer(requested, "ef_search", None, minimum=1)
-    if ef_search < k:
-        raise ConfigError("ef_search must be >= k")
+    active_count = sum(case["method"] != "baseline" for case in cases)
     resolved: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "experiment_name": name,
@@ -216,7 +307,7 @@ def resolve_config(
         "include_baseline": include_baseline,
         "case_source": case_source,
         "cases": cases,
-        "active_configuration_count": len(cases),
+        "active_configuration_count": active_count,
         "configuration_count": len(cases) + int(include_baseline),
         "expected_result_count": blocks * (len(cases) + int(include_baseline)),
     }
@@ -243,14 +334,17 @@ def configurations(resolved: dict[str, Any]) -> list[dict[str, Any]]:
         result.append({
             "id": "baseline", "method": "baseline",
             "beta": None, "prefetch": "none",
+            "ef_search": resolved["ef_search"], "baseline_id": None,
         })
     for case in resolved["cases"]:
         config = {
-            "method": case["mode"],
+            "id": case["id"],
+            "method": case["method"],
             "beta": case["beta"],
             "prefetch": case["prefetch"],
+            "ef_search": case["ef_search"],
+            "baseline_id": case["baseline_id"],
         }
-        config["id"] = configuration_id(case)
         result.append(config)
     return result
 
