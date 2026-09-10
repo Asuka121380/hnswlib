@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "experiment_name": "matched-recall-formal-v1",
+  "experiment_role": "formal",
+  "dataset": "gist1m",
+  "dimension": 960,
+  "query_start": 0,
+  "query_count": 1000,
+  "k": 10,
+  "ef_search": 500,
+  "warmup_queries": 100,
+  "within_process_repeats": 5,
+  "blocks": 5,
+  "seed": 20260910,
+  "include_baseline": false,
+  "cases": [
+    {"id": "baseline-ef360", "method": "baseline", "ef_search": 360},
+    {"id": "baseline-ef370", "method": "baseline", "ef_search": 370},
+    {"id": "baseline-ef435", "method": "baseline", "ef_search": 435},
+    {"id": "baseline-ef450", "method": "baseline", "ef_search": 450},
+    {"id": "baseline-ef485", "method": "baseline", "ef_search": 485},
+    {
+      "id": "approx-retry-beta1p35-legacy-ef500",
+      "method": "approx-retry",
+      "beta": 1.35,
+      "prefetch": "legacy",
+      "ef_search": 500,
+      "baseline_id": "baseline-ef360"
+    },
+    {
+      "id": "approx-no-retry-beta1p4-legacy-ef500",
+      "method": "approx-no-retry",
+      "beta": 1.40,
+      "prefetch": "legacy",
+      "ef_search": 500,
+      "baseline_id": "baseline-ef370"
+    },
+    {
+      "id": "approx-no-retry-beta1p45-legacy-ef500",
+      "method": "approx-no-retry",
+      "beta": 1.45,
+      "prefetch": "legacy",
+      "ef_search": 500,
+      "baseline_id": "baseline-ef435"
+    },
+    {
+      "id": "approx-retry-beta1p45-legacy-ef500",
+      "method": "approx-retry",
+      "beta": 1.45,
+      "prefetch": "legacy",
+      "ef_search": 500,
+      "baseline_id": "baseline-ef450"
+    },
+    {
+      "id": "approx-no-retry-beta1p5-legacy-ef500",
+      "method": "approx-no-retry",
+      "beta": 1.50,
+      "prefetch": "legacy",
+      "ef_search": 500,
+      "baseline_id": "baseline-ef485"
+    }
+  ]
+}
