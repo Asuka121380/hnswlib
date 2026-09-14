@@ -30,6 +30,8 @@ FIELDS = (
     "qps_speedup_mean", "qps_speedup_ci_low", "qps_speedup_ci_high",
     "latency_p50_ns_median", "latency_p95_ns_median",
     "latency_p99_ns_median", "process_replicates", "checksum_consistent",
+    "cycles_per_query_median", "instructions_per_query_median",
+    "l1d_read_misses_per_query_median", "ipc_median",
 )
 
 
@@ -142,6 +144,41 @@ def main() -> int:
             raise SystemExit(f"result checksum is missing: {config_id}")
         checksums = {
             str(data["result_checksum"]) for _, data in observations}
+        counter_enabled = all(
+            bool(data.get("hardware_counters", {}).get(
+                "cycles", {}).get("available", False)) and
+            float(data.get("hardware_counters", {}).get(
+                "cycles", {}).get("value", 0)) > 0 and
+            bool(data.get("hardware_counters", {}).get(
+                "instructions", {}).get("available", False))
+            for _, data in observations)
+        if counter_enabled:
+            cycles_per_query = [
+                float(data["hardware_counters"]["cycles"]["value"]) /
+                float(data["measured_queries"])
+                for _, data in observations
+            ]
+            instructions_per_query = [
+                float(data["hardware_counters"]["instructions"]["value"]) /
+                float(data["measured_queries"])
+                for _, data in observations
+            ]
+            l1d_available = all(
+                bool(data["hardware_counters"]["l1d_read_misses"]["available"])
+                for _, data in observations)
+            l1d_per_query = ([
+                float(data["hardware_counters"]["l1d_read_misses"]["value"]) /
+                float(data["measured_queries"])
+                for _, data in observations
+            ] if l1d_available else [])
+            ipc = [
+                float(data["hardware_counters"]["instructions"]["value"]) /
+                float(data["hardware_counters"]["cycles"]["value"])
+                for _, data in observations
+            ]
+        else:
+            cycles_per_query = instructions_per_query = []
+            l1d_per_query = ipc = []
         rows.append({
             "experiment_name": resolved["experiment_name"],
             "experiment_role": resolved["experiment_role"],
@@ -173,6 +210,15 @@ def main() -> int:
                 float(data["latency_p99_ns"]) for _, data in observations),
             "process_replicates": len(observations),
             "checksum_consistent": len(checksums) == 1,
+            "cycles_per_query_median": (
+                statistics.median(cycles_per_query)
+                if cycles_per_query else ""),
+            "instructions_per_query_median": (
+                statistics.median(instructions_per_query)
+                if instructions_per_query else ""),
+            "l1d_read_misses_per_query_median": (
+                statistics.median(l1d_per_query) if l1d_per_query else ""),
+            "ipc_median": statistics.median(ipc) if ipc else "",
         })
 
     rows.sort(key=lambda row: (

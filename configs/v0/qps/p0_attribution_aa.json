@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "experiment_name": "p0-baseline-aa-v1",
+  "experiment_role": "formal",
+  "dataset": "gist1m",
+  "dimension": 960,
+  "query_start": 0,
+  "query_count": 1000,
+  "k": 10,
+  "ef_search": 435,
+  "warmup_queries": 100,
+  "within_process_repeats": 5,
+  "blocks": 5,
+  "seed": 20260913,
+  "include_baseline": false,
+  "emit_latency_records": true,
+  "emit_result_records": false,
+  "require_single_cpu_affinity": true,
+  "cases": [
+    {"id": "baseline-ef435-a", "method": "baseline", "ef_search": 435},
+    {"id": "baseline-ef435-b", "method": "baseline", "ef_search": 435}
+  ]
+}

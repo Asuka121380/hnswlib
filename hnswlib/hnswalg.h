@@ -574,9 +574,20 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 stop_condition->add_point_to_result(getExternalLabel(ep_id), ep_data, dist);
             }
             candidate_set.emplace(-dist, ep_id);
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+            if (use_edge_quant_v0 && v0_collect_metrics) {
+                ++v0_metrics->result_queue_pushes;
+                ++v0_metrics->candidate_queue_pushes;
+            }
+#endif
         } else {
             lowerBound = std::numeric_limits<dist_t>::max();
             candidate_set.emplace(-lowerBound, ep_id);
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+            if (use_edge_quant_v0 && v0_collect_metrics) {
+                ++v0_metrics->candidate_queue_pushes;
+            }
+#endif
         }
 
         visited_array[ep_id] = visited_array_tag;
@@ -606,6 +617,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 break;
             }
             candidate_set.pop();
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+            if (use_edge_quant_v0 && v0_collect_metrics) {
+                ++v0_metrics->candidate_queue_pops;
+            }
+#endif
 
             tableint current_node_id = current_node_pair.second;
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
@@ -1065,6 +1081,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
                     if (flag_consider_candidate) {
                         candidate_set.emplace(-dist, candidate_id);
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+                        if (use_edge_quant_v0 && v0_collect_metrics) {
+                            ++v0_metrics->candidate_queue_pushes;
+                        }
+#endif
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
                         if (v0_collect_metrics && v0_candidate_is_retry) {
                             ++v0_metrics->approx_retry_inserted_candidate;
@@ -1085,6 +1106,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         if (bare_bone_search || 
                             (!isMarkedDeleted(candidate_id) && ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(candidate_id))))) {
                             top_candidates.emplace(dist, candidate_id);
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+                            if (use_edge_quant_v0 && v0_collect_metrics) {
+                                ++v0_metrics->result_queue_pushes;
+                            }
+#endif
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
                             if (v0_collect_metrics && v0_candidate_is_retry) {
                                 ++v0_metrics->approx_retry_inserted_result;
@@ -1110,6 +1136,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         while (flag_remove_extra) {
                             tableint id = top_candidates.top().second;
                             top_candidates.pop();
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+                            if (use_edge_quant_v0 && v0_collect_metrics) {
+                                ++v0_metrics->result_queue_pops;
+                            }
+#endif
                             if (!bare_bone_search && stop_condition) {
                                 stop_condition->remove_point_from_result(getExternalLabel(id), getDataByInternalId(id), dist);
                                 flag_remove_extra = stop_condition->should_remove_extra();
@@ -1119,7 +1150,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         }
 
                         if (!top_candidates.empty()) {
+                            const dist_t previous_lower_bound = lowerBound;
                             lowerBound = top_candidates.top().first;
+#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
+                            if (use_edge_quant_v0 && v0_collect_metrics &&
+                                lowerBound != previous_lower_bound) {
+                                ++v0_metrics->threshold_updates;
+                            }
+#endif
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
                             if (v0_approx_config != nullptr) {
                                 v0_scaled_threshold =

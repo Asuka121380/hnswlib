@@ -39,6 +39,11 @@ struct V0QueryMetrics {
     uint64_t expanded_nodes = 0;
     uint64_t edge_scans = 0;
     uint64_t duplicate_encounters = 0;
+    uint64_t candidate_queue_pushes = 0;
+    uint64_t candidate_queue_pops = 0;
+    uint64_t result_queue_pushes = 0;
+    uint64_t result_queue_pops = 0;
+    uint64_t threshold_updates = 0;
     uint64_t approx_eligible_first_visits = 0;
     uint64_t approx_first_pruned = 0;
     uint64_t approx_retry_encountered = 0;

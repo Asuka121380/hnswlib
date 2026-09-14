@@ -19,6 +19,7 @@
 #endif
 
 #include "hnswlib/hnswlib.h"
+#include "../../scripts/v0/performance_ready/p0_counters.h"
 
 namespace {
 
@@ -27,6 +28,8 @@ struct Options {
     std::string sidecar_path;
     std::string query_path;
     std::string output_path;
+    std::string latency_records_path;
+    std::string result_records_path;
     std::string method;
     std::string prefetch = "legacy";
     size_t dimension = 0U;
@@ -38,6 +41,7 @@ struct Options {
     size_t repeats = 5U;
     double beta = 0.0;
     int cpu = -1;
+    bool hardware_counters = false;
 };
 
 std::string requireValue(int& i, int argc, char** argv) {
@@ -69,6 +73,10 @@ Options parseOptions(int argc, char** argv) {
             options.query_path = requireValue(i, argc, argv);
         else if (key == "--output")
             options.output_path = requireValue(i, argc, argv);
+        else if (key == "--latency-records-output")
+            options.latency_records_path = requireValue(i, argc, argv);
+        else if (key == "--result-records-output")
+            options.result_records_path = requireValue(i, argc, argv);
         else if (key == "--method")
             options.method = requireValue(i, argc, argv);
         else if (key == "--prefetch")
@@ -97,6 +105,8 @@ Options parseOptions(int argc, char** argv) {
             options.beta = std::stod(requireValue(i, argc, argv));
         else if (key == "--cpu")
             options.cpu = std::stoi(requireValue(i, argc, argv));
+        else if (key == "--hardware-counters")
+            options.hardware_counters = true;
         else if (key == "--help") {
             std::cout
                 << "v0_performance_runner --method baseline|approx-no-retry|approx-retry "
@@ -104,7 +114,9 @@ Options parseOptions(int argc, char** argv) {
                 << "--query-count N --output FILE [--sidecar-path FILE] "
                 << "[--beta X] [--prefetch legacy|gate] [--query-start N] "
                 << "[--k N] [--ef-search N] [--warmup-queries N] "
-                << "[--repeats N] [--cpu N]\n";
+                << "[--repeats N] [--cpu N] "
+                << "[--latency-records-output FILE] "
+                << "[--result-records-output FILE]\n";
             std::exit(0);
         } else {
             throw std::invalid_argument("unknown option: " + key);
@@ -274,6 +286,8 @@ int main(int argc, char** argv) {
 
         std::vector<uint64_t> latencies;
         latencies.reserve(options.repeats * options.query_count);
+        P0Counters hardware_counters(options.hardware_counters);
+        hardware_counters.resetAndStart();
         uint64_t total_ns = 0U;
         for (size_t repeat = 0U; repeat < options.repeats; ++repeat) {
             for (size_t i = 0U; i < options.query_count; ++i) {
@@ -294,7 +308,54 @@ int main(int argc, char** argv) {
                 checksum = mixChecksum(checksum, result);
             }
         }
-        std::sort(latencies.begin(), latencies.end());
+        hardware_counters.stopAndCollect();
+        if (!options.latency_records_path.empty()) {
+            std::ofstream records(options.latency_records_path.c_str());
+            if (!records) {
+                throw std::runtime_error("cannot create latency records output");
+            }
+            records << "repeat_id,query_id,latency_ns\n";
+            for (size_t sample = 0U; sample < latencies.size(); ++sample) {
+                records << sample / options.query_count << ','
+                        << options.query_start + sample % options.query_count
+                        << ',' << latencies[sample] << '\n';
+            }
+            if (!records) {
+                throw std::runtime_error("failed to write latency records output");
+            }
+        }
+
+        if (!options.result_records_path.empty()) {
+            std::ofstream records(options.result_records_path.c_str());
+            if (!records) {
+                throw std::runtime_error("cannot create result records output");
+            }
+            records << "query_id,rank,label,distance\n";
+            records << std::setprecision(17);
+            for (size_t i = 0U; i < options.query_count; ++i) {
+                std::priority_queue<
+                    std::pair<float, hnswlib::labeltype> > result =
+                        run_query(queries.data() + i * options.dimension);
+                std::vector<std::pair<float, hnswlib::labeltype> > ordered;
+                ordered.reserve(result.size());
+                while (!result.empty()) {
+                    ordered.push_back(result.top());
+                    result.pop();
+                }
+                std::reverse(ordered.begin(), ordered.end());
+                for (size_t rank = 0U; rank < ordered.size(); ++rank) {
+                    records << options.query_start + i << ',' << rank << ','
+                            << ordered[rank].second << ','
+                            << ordered[rank].first << '\n';
+                }
+            }
+            if (!records) {
+                throw std::runtime_error("failed to write result records output");
+            }
+        }
+
+        std::vector<uint64_t> sorted_latencies(latencies);
+        std::sort(sorted_latencies.begin(), sorted_latencies.end());
         const size_t measured_queries =
             options.repeats * options.query_count;
         const double qps = total_ns == 0U ? 0.0 :
@@ -339,17 +400,37 @@ int main(int argc, char** argv) {
             << "  \"total_latency_ns\": " << total_ns << ",\n"
             << "  \"qps\": " << qps << ",\n"
             << "  \"latency_p50_ns\": "
-            << percentile(latencies, 0.50) << ",\n"
+            << percentile(sorted_latencies, 0.50) << ",\n"
             << "  \"latency_p95_ns\": "
-            << percentile(latencies, 0.95) << ",\n"
+            << percentile(sorted_latencies, 0.95) << ",\n"
             << "  \"latency_p99_ns\": "
-            << percentile(latencies, 0.99) << ",\n"
+            << percentile(sorted_latencies, 0.99) << ",\n"
             << "  \"result_checksum\": \"" << std::hex
             << checksum << std::dec << "\",\n"
+            << "  \"latency_records_written\": "
+            << (!options.latency_records_path.empty() ? "true" : "false")
+            << ",\n"
+            << "  \"result_records_written\": "
+            << (!options.result_records_path.empty() ? "true" : "false")
+            << ",\n"
+            << "  \"hardware_counters_requested\": "
+            << (options.hardware_counters ? "true" : "false") << ",\n"
+            << "  \"hardware_counters\": {\n";
+        for (size_t i = 0U; i < P0Counters::kCount; ++i) {
+            const P0CounterEntry& counter = hardware_counters.entry(i);
+            output << "    \"" << counter.name << "\": {"
+                << "\"available\":"
+                << (counter.available ? "true" : "false") << ','
+                << "\"value\":" << counter.value << ','
+                << "\"running_ratio\":" << counter.running_ratio << ','
+                << "\"error_number\":" << counter.error_number << '}';
+            output << (i + 1U == P0Counters::kCount ? "\n" : ",\n");
+        }
+        output << "  },\n"
             << "  \"latency_samples_ns\": [";
-        for (size_t i = 0U; i < latencies.size(); ++i) {
+        for (size_t i = 0U; i < sorted_latencies.size(); ++i) {
             if (i != 0U) output << ',';
-            output << latencies[i];
+            output << sorted_latencies[i];
         }
         output << "]\n"
             << "}\n";

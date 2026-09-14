@@ -24,6 +24,8 @@ ALLOWED_KEYS = frozenset((
     "dimension", "query_start", "query_count", "k", "ef_search",
     "warmup_queries", "within_process_repeats", "blocks", "seed",
     "include_baseline", "betas", "modes", "prefetches", "cases",
+    "emit_latency_records", "emit_result_records",
+    "require_single_cpu_affinity", "hardware_counters",
 ))
 
 
@@ -68,6 +70,15 @@ def _string(requested: dict[str, Any], name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ConfigError(f"{name} must be a non-empty string")
     return value.strip()
+
+
+def _boolean(
+    requested: dict[str, Any], name: str, default: bool = False,
+) -> bool:
+    value = requested.get(name, default)
+    if not isinstance(value, bool):
+        raise ConfigError(f"{name} must be boolean")
+    return value
 
 
 def _unique_strings(value: object, name: str, allowed: tuple[str, ...]) -> list[str]:
@@ -287,6 +298,10 @@ def resolve_config(
     if role == "formal" and (blocks < 5 or repeats < 5):
         raise ConfigError(
             "formal experiments require blocks and within_process_repeats >= 5")
+    hardware_counters = _boolean(requested, "hardware_counters")
+    if role == "formal" and hardware_counters:
+        raise ConfigError(
+            "hardware counters require a separate exploratory diagnostic run")
 
     active_count = sum(case["method"] != "baseline" for case in cases)
     resolved: dict[str, Any] = {
@@ -305,6 +320,13 @@ def resolve_config(
         "blocks": blocks,
         "seed": _integer(requested, "seed", None, minimum=0),
         "include_baseline": include_baseline,
+        "emit_latency_records": _boolean(
+            requested, "emit_latency_records"),
+        "emit_result_records": _boolean(
+            requested, "emit_result_records"),
+        "require_single_cpu_affinity": _boolean(
+            requested, "require_single_cpu_affinity"),
+        "hardware_counters": hardware_counters,
         "case_source": case_source,
         "cases": cases,
         "active_configuration_count": active_count,

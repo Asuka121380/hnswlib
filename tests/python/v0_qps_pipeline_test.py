@@ -64,6 +64,19 @@ class QpsConfigTest(unittest.TestCase):
         self.assertEqual(resolved["expected_result_count"], 65)
         self.assertTrue(resolved["exclusive"])
 
+    def test_p0_formal_contract_freezes_attribution_outputs(self) -> None:
+        _, resolved = self.module.load_config(
+            ROOT / "configs" / "v0" / "qps" /
+            "p0_attribution_formal.json",
+            "formal-exclusive",
+        )
+        self.assertEqual(resolved["configuration_count"], 6)
+        self.assertEqual(resolved["expected_result_count"], 30)
+        self.assertTrue(resolved["emit_latency_records"])
+        self.assertTrue(resolved["emit_result_records"])
+        self.assertTrue(resolved["require_single_cpu_affinity"])
+        self.assertFalse(resolved["hardware_counters"])
+
     def test_exploratory_scan_resolves_to_63_results(self) -> None:
         _, resolved = self.module.load_config(
             ROOT / "configs" / "v0" / "qps" / "beta_130_140_scan.json",
@@ -122,6 +135,15 @@ class QpsConfigTest(unittest.TestCase):
         requested["within_process_repeats"] = 5
         with self.assertRaises(self.module.ConfigError):
             self.module.resolve_config(requested, "exploratory-shared")
+
+    def test_formal_experiment_rejects_hardware_counters(self) -> None:
+        requested = exploratory_config()
+        requested["experiment_role"] = "formal"
+        requested["blocks"] = 5
+        requested["within_process_repeats"] = 5
+        requested["hardware_counters"] = True
+        with self.assertRaises(self.module.ConfigError):
+            self.module.resolve_config(requested, "formal-exclusive")
     def test_ambiguous_and_duplicate_cases_are_rejected(self) -> None:
         requested = exploratory_config()
         requested["betas"] = [1.3]
@@ -192,7 +214,43 @@ class QpsMatrixIntegrationTest(unittest.TestCase):
             "latency_p99_ns": 30,
             "result_checksum": f"{method}:{beta}:{prefetch}",
         }), encoding="utf-8")
+        if "--latency-records-output" in command:
+            path = Path(command[command.index("--latency-records-output") + 1])
+            path.write_text(
+                "repeat_id,query_id,latency_ns\n0,0,10\n",
+                encoding="utf-8")
+        if "--result-records-output" in command:
+            path = Path(command[command.index("--result-records-output") + 1])
+            path.write_text(
+                "query_id,rank,label,distance\n0,0,1,1.0\n",
+                encoding="utf-8")
         return subprocess.CompletedProcess(command, 0)
+
+    def test_optional_latency_and_result_artifacts_are_hashed(self) -> None:
+        runner_module = load_module(
+            "run_qps_matrix_artifacts_tested", SCRIPTS / "run_qps_matrix.py")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("runner", "index.bin", "sidecar.bin",
+                         "query.fvecs", "CMakeCache.txt"):
+                (root / name).write_text(name, encoding="utf-8")
+            requested = exploratory_config()
+            requested["emit_latency_records"] = True
+            requested["emit_result_records"] = True
+            config = root / "config.json"
+            config.write_text(json.dumps(requested), encoding="utf-8")
+            run_root = root / "run"
+            with mock.patch.object(
+                    sys, "argv", self._arguments(root, config, run_root)), \
+                    mock.patch.object(
+                        runner_module.subprocess, "run",
+                        side_effect=self._fake_runner):
+                self.assertEqual(runner_module.main(), 0)
+            manifest = json.loads((run_root / "manifest.json").read_text(
+                encoding="utf-8"))
+            self.assertTrue(all(
+                len(item["artifacts"]) == 2
+                for item in manifest["completed"]))
 
     def test_end_to_end_manifest_resume_and_summary(self) -> None:
         runner_module = load_module(
@@ -270,6 +328,78 @@ class QpsMatrixIntegrationTest(unittest.TestCase):
             with mock.patch.object(sys, "argv", arguments + ["--resume"]):
                 with self.assertRaises(SystemExit):
                     runner_module.main()
+
+    def test_required_single_cpu_affinity_is_enforced(self) -> None:
+        runner_module = load_module(
+            "run_qps_matrix_affinity_tested", SCRIPTS / "run_qps_matrix.py")
+        with mock.patch.object(
+                runner_module.os, "sched_getaffinity", return_value={2, 3},
+                create=True):
+            with self.assertRaises(SystemExit):
+                runner_module.require_single_cpu_affinity({
+                    "require_single_cpu_affinity": True,
+                })
+        with mock.patch.object(
+                runner_module.os, "sched_getaffinity", return_value={2},
+                create=True):
+            runner_module.require_single_cpu_affinity({
+                "require_single_cpu_affinity": True,
+            })
+
+
+class P0AttributionAnalysisTest(unittest.TestCase):
+    def test_ordered_latency_join_and_pair_summary(self) -> None:
+        analysis = load_module(
+            "analyze_p0_attribution_tested",
+            SCRIPTS / "analyze_p0_attribution.py")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            latency_dir = root / "latency_records"
+            latency_dir.mkdir()
+            qps_dir = root / "qps"
+            qps_dir.mkdir()
+            completed = []
+            for block, (config, values) in enumerate((
+                    ("baseline-ef435", ((100, 120), (200, 220))),
+                    ("edgepq", ((90, 110), (240, 260))))):
+                path = latency_dir / f"{config}.csv"
+                with path.open("w", encoding="utf-8", newline="") as handle:
+                    writer = csv.writer(handle)
+                    writer.writerow(("repeat_id", "query_id", "latency_ns"))
+                    for repeat, repeat_values in enumerate(values):
+                        for query_id, latency in enumerate(repeat_values):
+                            writer.writerow((repeat, query_id, latency))
+                qps_path = qps_dir / f"{config}.json"
+                qps_path.write_text(json.dumps({
+                    "qps": 110.0 if config == "edgepq" else 100.0,
+                }), encoding="utf-8")
+                completed.append({
+                    "run_id": config,
+                    "block": block,
+                    "config": {"id": config},
+                    "result": str(qps_path.relative_to(root)),
+                    "sha256": analysis.sha256(qps_path),
+                    "artifacts": [{
+                        "path": str(path.relative_to(root)),
+                        "sha256": analysis.sha256(path),
+                    }],
+                })
+            (root / "manifest.json").write_text(json.dumps({
+                "status": "complete",
+                "completed": completed,
+                "resource_observations": [{"allowed_cpus": [7]}],
+            }), encoding="utf-8")
+            output = root / "analysis"
+            with mock.patch.object(sys, "argv", [
+                    "analyze_p0_attribution.py", "--run-root", str(root),
+                    "--pair", "edgepq=baseline-ef435",
+                    "--output-dir", str(output)]):
+                self.assertEqual(analysis.main(), 0)
+            report = json.loads((output / "attribution_summary.json").read_text(
+                encoding="utf-8"))
+            self.assertTrue(report["single_cpu_affinity_observed"])
+            self.assertEqual(report["pairs"][0]["queries"], 2)
+            self.assertTrue((output / "query_attribution.csv").is_file())
 
 
 class MatchedRecallPipelineTest(unittest.TestCase):

@@ -88,12 +88,25 @@ struct Totals {
     uint64_t expanded_nodes = 0;
     uint64_t edge_scans = 0;
     uint64_t duplicate_encounters = 0;
+    uint64_t candidate_queue_pushes = 0;
+    uint64_t candidate_queue_pops = 0;
+    uint64_t result_queue_pushes = 0;
+    uint64_t result_queue_pops = 0;
+    uint64_t threshold_updates = 0;
     uint64_t shadow_records_seen = 0;
     uint64_t shadow_records_written = 0;
     uint64_t retry_candidate_records_seen = 0;
     uint64_t retry_candidate_records_written = 0;
     uint64_t retry_query_summary_rows = 0;
     uint64_t baseline_exact_distance_computed = 0;
+    uint64_t baseline_expanded_nodes = 0;
+    uint64_t baseline_edge_scans = 0;
+    uint64_t baseline_duplicate_encounters = 0;
+    uint64_t baseline_candidate_queue_pushes = 0;
+    uint64_t baseline_candidate_queue_pops = 0;
+    uint64_t baseline_result_queue_pushes = 0;
+    uint64_t baseline_result_queue_pops = 0;
+    uint64_t baseline_threshold_updates = 0;
     uint64_t result_overlap_sum = 0;
     uint64_t recall_loss_queries = 0;
     uint64_t catastrophic_recall_loss_queries = 0;
@@ -950,6 +963,11 @@ void addMetrics(
     totals.edge_scans += metrics.edge_scans;
     totals.duplicate_encounters +=
         metrics.duplicate_encounters;
+    totals.candidate_queue_pushes += metrics.candidate_queue_pushes;
+    totals.candidate_queue_pops += metrics.candidate_queue_pops;
+    totals.result_queue_pushes += metrics.result_queue_pushes;
+    totals.result_queue_pops += metrics.result_queue_pops;
+    totals.threshold_updates += metrics.threshold_updates;
     totals.approx_eligible_first_visits +=
         metrics.approx_eligible_first_visits;
     totals.approx_first_pruned += metrics.approx_first_pruned;
@@ -1001,7 +1019,7 @@ void writeMetadata(
     out
         << "{\n"
         << "  \"format\": \"hnswlib_v0_search_run\",\n"
-        << "  \"format_version\": 2,\n"
+        << "  \"format_version\": 3,\n"
         << "  \"shadow_schema_version\": 2,\n"
         << "  \"enabled_methods\": "
         << (options.mode == "retry-shadow" ?
@@ -1155,7 +1173,7 @@ bool writeSummary(
     out
         << "{\n"
         << "  \"format\": \"hnswlib_v0_search_summary\",\n"
-        << "  \"format_version\": 2,\n"
+        << "  \"format_version\": 3,\n"
         << "  \"shadow_schema_version\": 2,\n"
         << "  \"retry_shadow_schema_version\": "
         << retryShadowSchemaVersion() << ",\n"
@@ -1202,6 +1220,32 @@ bool writeSummary(
         << "  \"edge_scans\": " << totals.edge_scans << ",\n"
         << "  \"duplicate_encounters\": "
         << totals.duplicate_encounters << ",\n"
+        << "  \"candidate_queue_pushes\": "
+        << totals.candidate_queue_pushes << ",\n"
+        << "  \"candidate_queue_pops\": "
+        << totals.candidate_queue_pops << ",\n"
+        << "  \"result_queue_pushes\": "
+        << totals.result_queue_pushes << ",\n"
+        << "  \"result_queue_pops\": "
+        << totals.result_queue_pops << ",\n"
+        << "  \"threshold_updates\": "
+        << totals.threshold_updates << ",\n"
+        << "  \"baseline_expanded_nodes\": "
+        << totals.baseline_expanded_nodes << ",\n"
+        << "  \"baseline_edge_scans\": "
+        << totals.baseline_edge_scans << ",\n"
+        << "  \"baseline_duplicate_encounters\": "
+        << totals.baseline_duplicate_encounters << ",\n"
+        << "  \"baseline_candidate_queue_pushes\": "
+        << totals.baseline_candidate_queue_pushes << ",\n"
+        << "  \"baseline_candidate_queue_pops\": "
+        << totals.baseline_candidate_queue_pops << ",\n"
+        << "  \"baseline_result_queue_pushes\": "
+        << totals.baseline_result_queue_pushes << ",\n"
+        << "  \"baseline_result_queue_pops\": "
+        << totals.baseline_result_queue_pops << ",\n"
+        << "  \"baseline_threshold_updates\": "
+        << totals.baseline_threshold_updates << ",\n"
         << "  \"shadow_records_seen\": "
         << totals.shadow_records_seen << ",\n"
         << "  \"shadow_records_written\": "
@@ -1327,10 +1371,17 @@ void run(const Options& options) {
         << "exact_only_fallback,exact_distance_saved,"
         << "lower_bound_violation,false_prune,"
         << "exact_distance_computed,expanded_nodes,edge_scans,"
-        << "duplicate_encounters,baseline_ground_truth_hits,"
+        << "duplicate_encounters,candidate_queue_pushes,"
+        << "candidate_queue_pops,result_queue_pushes,"
+        << "result_queue_pops,threshold_updates,"
+        << "baseline_ground_truth_hits,"
         << "v0_ground_truth_hits,ground_truth_hits_lost,"
         << "result_overlap_at_k,recall_loss,"
-        << "baseline_exact_distance_computed,"
+        << "baseline_exact_distance_computed,baseline_expanded_nodes,"
+        << "baseline_edge_scans,baseline_duplicate_encounters,"
+        << "baseline_candidate_queue_pushes,baseline_candidate_queue_pops,"
+        << "baseline_result_queue_pushes,baseline_result_queue_pops,"
+        << "baseline_threshold_updates,"
         << "baseline_relative_exact_dco_reduction,"
         << "approx_eligible_first_visits,approx_first_pruned,"
         << "approx_retry_encountered,approx_retry_exact_distance,"
@@ -1503,6 +1554,20 @@ void run(const Options& options) {
             recall_loss >= 0.2 - 1e-12 ? 1U : 0U;
         totals.baseline_exact_distance_computed +=
             baseline_metrics.exact_distance_computed;
+        totals.baseline_expanded_nodes += baseline_metrics.expanded_nodes;
+        totals.baseline_edge_scans += baseline_metrics.edge_scans;
+        totals.baseline_duplicate_encounters +=
+            baseline_metrics.duplicate_encounters;
+        totals.baseline_candidate_queue_pushes +=
+            baseline_metrics.candidate_queue_pushes;
+        totals.baseline_candidate_queue_pops +=
+            baseline_metrics.candidate_queue_pops;
+        totals.baseline_result_queue_pushes +=
+            baseline_metrics.result_queue_pushes;
+        totals.baseline_result_queue_pops +=
+            baseline_metrics.result_queue_pops;
+        totals.baseline_threshold_updates +=
+            baseline_metrics.threshold_updates;
         addMetrics(totals, metrics);
 
         query_out
@@ -1525,12 +1590,25 @@ void run(const Options& options) {
             << metrics.expanded_nodes << ','
             << metrics.edge_scans << ','
             << metrics.duplicate_encounters << ','
+            << metrics.candidate_queue_pushes << ','
+            << metrics.candidate_queue_pops << ','
+            << metrics.result_queue_pushes << ','
+            << metrics.result_queue_pops << ','
+            << metrics.threshold_updates << ','
             << baseline_hits << ','
             << v0_hits << ','
             << hits_lost << ','
             << result_overlap << ','
             << recall_loss << ','
             << baseline_metrics.exact_distance_computed << ','
+            << baseline_metrics.expanded_nodes << ','
+            << baseline_metrics.edge_scans << ','
+            << baseline_metrics.duplicate_encounters << ','
+            << baseline_metrics.candidate_queue_pushes << ','
+            << baseline_metrics.candidate_queue_pops << ','
+            << baseline_metrics.result_queue_pushes << ','
+            << baseline_metrics.result_queue_pops << ','
+            << baseline_metrics.threshold_updates << ','
             << query_dco_reduction << ','
             << metrics.approx_eligible_first_visits << ','
             << metrics.approx_first_pruned << ','

@@ -71,7 +71,7 @@ def write_or_verify(path: Path, value: object) -> None:
 
 
 def resource_observation(profile: str) -> dict[str, Any]:
-    return {
+    observation: dict[str, Any] = {
         "resource_profile": profile,
         "exclusive": profile == "formal-exclusive",
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
@@ -84,6 +84,22 @@ def resource_observation(profile: str) -> dict[str, Any]:
         "runner_threads": 1,
         "observed_utc": datetime.now(timezone.utc).isoformat(),
     }
+    if hasattr(os, "sched_getaffinity"):
+        observation["allowed_cpus"] = sorted(os.sched_getaffinity(0))
+    return observation
+
+
+def require_single_cpu_affinity(resolved: dict[str, Any]) -> None:
+    if not resolved.get("require_single_cpu_affinity", False):
+        return
+    if not hasattr(os, "sched_getaffinity"):
+        raise SystemExit(
+            "single-CPU affinity is required but cannot be observed")
+    allowed = sorted(os.sched_getaffinity(0))
+    if len(allowed) != 1:
+        raise SystemExit(
+            "single-CPU affinity is required; allowed CPUs are " +
+            ",".join(str(cpu) for cpu in allowed))
 
 
 def parse_args() -> argparse.Namespace:
@@ -122,6 +138,8 @@ def main() -> int:
         }, indent=2, sort_keys=True))
         return 0
 
+    require_single_cpu_affinity(resolved)
+
     required = (
         args.runner, args.index_path, args.sidecar_path,
         args.query_path, args.cmake_cache,
@@ -148,6 +166,8 @@ def main() -> int:
 
     manifest_path = args.run_root / "manifest.json"
     results_dir = args.run_root / "qps"
+    latency_dir = args.run_root / "latency_records"
+    result_records_dir = args.run_root / "result_records"
     was_complete = False
     if manifest_path.exists():
         if not args.resume:
@@ -184,6 +204,10 @@ def main() -> int:
         }
         write_or_verify(args.run_root / "build_contract.json", build_contract)
         results_dir.mkdir(parents=True, exist_ok=True)
+        if resolved.get("emit_latency_records"):
+            latency_dir.mkdir(parents=True, exist_ok=True)
+        if resolved.get("emit_result_records"):
+            result_records_dir.mkdir(parents=True, exist_ok=True)
         manifest = {
             "schema_version": 1,
             "status": "running",
@@ -222,6 +246,14 @@ def main() -> int:
                     raise SystemExit(f"completed result is missing: {output}")
                 if sha256(output) != previous.get("sha256"):
                     raise SystemExit(f"completed result checksum mismatch: {output}")
+                for artifact in previous.get("artifacts", []):
+                    artifact_path = args.run_root / artifact["path"]
+                    if not artifact_path.is_file():
+                        raise SystemExit(
+                            f"completed artifact is missing: {artifact_path}")
+                    if sha256(artifact_path) != artifact.get("sha256"):
+                        raise SystemExit(
+                            f"completed artifact checksum mismatch: {artifact_path}")
                 print(f"REUSE {run_id}")
                 continue
             if output.exists():
@@ -251,6 +283,23 @@ def main() -> int:
                     "--sidecar-path", str(args.sidecar_path),
                     "--beta", str(config["beta"]),
                 ))
+            if resolved.get("hardware_counters"):
+                command.append("--hardware-counters")
+            artifacts: list[tuple[Path, Path]] = []
+            if resolved.get("emit_latency_records"):
+                latency_output = latency_dir / f"{run_id}.csv"
+                command.extend((
+                    "--latency-records-output", str(latency_output),
+                ))
+                artifacts.append((latency_output, latency_output.relative_to(
+                    args.run_root)))
+            if resolved.get("emit_result_records"):
+                records_output = result_records_dir / f"{run_id}.csv"
+                command.extend((
+                    "--result-records-output", str(records_output),
+                ))
+                artifacts.append((records_output, records_output.relative_to(
+                    args.run_root)))
             print(f"START {run_id}", flush=True)
             try:
                 subprocess.run(command, check=True)
@@ -271,6 +320,10 @@ def main() -> int:
                 "command": command,
                 "result": str(Path("qps") / output.name),
                 "sha256": sha256(output),
+                "artifacts": [
+                    {"path": str(relative), "sha256": sha256(path)}
+                    for path, relative in artifacts
+                ],
             }
             completed_by_id[run_id] = item
             manifest["completed"] = list(completed_by_id.values())
