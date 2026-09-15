@@ -46,9 +46,31 @@ and updates `manifest.json` after every completed position. Use
 schedule machinery.
 
 `v0_fast_kernel_microbenchmark` produces the component costs required by the
-plan. Combine its JSON with an active metrics `summary.json` using
-`evaluate_break_even.py`; the script applies the frozen 25% safety-headroom
-gate and exits nonzero when the estimated overhead exceeds the allowance.
+plan. P0.3 must run through `submit_component_microbenchmark.sh`: it validates
+the portable performance build, strips inherited `LD_LIBRARY_PATH`, requests
+the named P0 node, narrows the allocation to one logical CPU, applies local
+NUMA binding, and runs seven isolated process blocks. Each block has an
+explicit warmup and cycles over a 64-item working set so the compiler cannot
+replace the repeated exact-L2/estimator calls with one invariant result. The
+orchestrator writes raw block JSON, a median summary with block distributions
+and 95% confidence intervals, provenance, and a completion marker.
+
+```text
+bash scripts/v0/performance_ready/submit_component_microbenchmark.sh \
+  --resource-profile exploratory-shared \
+  --partition testing --qos normal --nodelist gpusrv-2 \
+  --time-limit 00:10:00 --memory 24G --dry-run
+```
+
+Combine `component_summary.json` with an active quality `summary.json` using
+`evaluate_break_even.py`. Pass `--matched-baseline-metrics` for the P0 matched
+pair: the exact-work benefit then comes from baseline minus active
+`exact_distance_computed`, rather than from the active run's local pruning
+counter. The evaluator distinguishes retry from no-retry, avoids charging the
+common visited-list reset or double-counting record access already inside the
+estimator, applies the frozen 25% safety-headroom gate, and exits nonzero when
+estimated kernel overhead exceeds the allowance. This gate does not model the
+P0.2 graph/queue-work delta and therefore is not an end-to-end reconstruction.
 
 Submit dense-beta calibration through `run_calibration.slurm`. It requires a
 new `RUN_ROOT` and the exact `EXPECTED_COMMIT`, supports restart by reusing only

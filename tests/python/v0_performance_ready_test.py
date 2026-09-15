@@ -25,6 +25,27 @@ def load_module(name: str, path: Path):
 
 
 class PerformanceReadyInfrastructureTest(unittest.TestCase):
+    def test_component_microbenchmark_summary_uses_block_median(self) -> None:
+        module = load_module(
+            "run_component_microbenchmark",
+            SCRIPTS / "run_component_microbenchmark.py")
+        raw = []
+        for block in range(5):
+            item = {
+                "kernel": "raw_fast_v1", "dimension": 960,
+                "pq_m": 32, "pq_ksub": 256, "iterations": 100,
+                "warmup_iterations": 10, "working_set": 64,
+                "state_bytes_per_query": 2000000,
+            }
+            item.update({metric: float(block + 1) for metric in module.METRICS})
+            raw.append(item)
+        summary = module.summarize(raw)
+        self.assertEqual(summary["blocks"], 5)
+        self.assertEqual(summary["fast_estimator_ns"], 3.0)
+        self.assertEqual(
+            summary["distributions"]["fast_estimator_ns"]["values"],
+            [1.0, 2.0, 3.0, 4.0, 5.0])
+
     def test_balanced_orders_cover_each_position(self) -> None:
         module = load_module("run_latin_square", SCRIPTS / "run_latin_square.py")
         self.assertEqual(len(set(module.BALANCED_ORDERS)), 6)
@@ -166,6 +187,7 @@ class PerformanceReadyInfrastructureTest(unittest.TestCase):
                 sys.executable, str(SCRIPTS / "evaluate_break_even.py"),
                 "--microbenchmark", str(micro_path),
                 "--metrics-summary", str(metrics_path),
+                "--mode", "approx-retry",
                 "--output", str(output_path),
             ]
             self.assertEqual(subprocess.run(command).returncode, 0)
@@ -174,6 +196,47 @@ class PerformanceReadyInfrastructureTest(unittest.TestCase):
             micro_path.write_text(json.dumps(micro), encoding="utf-8")
             self.assertEqual(subprocess.run(command).returncode, 1)
             self.assertEqual(json.loads(output_path.read_text())["status"], "FAIL")
+
+    def test_break_even_uses_matched_pair_net_exact_delta(self) -> None:
+        micro = {
+            "fast_lut_build_ns": 1,
+            "fast_estimator_ns": 1,
+            "state_mark_ns": 1000,
+            "exact_l2_ns": 10,
+        }
+        active = {
+            "query_count": 1,
+            "approx_eligible_first_visits": 1,
+            "approx_first_pruned": 100,
+            "edge_scans": 1,
+            "exact_distance_saved": 1,
+            "exact_distance_computed": 100,
+        }
+        baseline = {
+            "exact_distance_computed": 999,
+            "baseline_exact_distance_computed": 200,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = [root / name for name in
+                     ("micro.json", "active.json", "baseline.json", "gate.json")]
+            for path, value in zip(paths[:3], (micro, active, baseline)):
+                path.write_text(json.dumps(value), encoding="utf-8")
+            completed = subprocess.run([
+                sys.executable, str(SCRIPTS / "evaluate_break_even.py"),
+                "--microbenchmark", str(paths[0]),
+                "--metrics-summary", str(paths[1]),
+                "--matched-baseline-metrics", str(paths[2]),
+                "--mode", "approx-no-retry",
+                "--output", str(paths[3]),
+            ])
+            self.assertEqual(completed.returncode, 0)
+            result = json.loads(paths[3].read_text())
+            self.assertEqual(result["inputs"]["net_exact_distances_saved"], 100)
+            self.assertEqual(
+                result["inputs"]["matched_baseline_exact_field"],
+                "baseline_exact_distance_computed")
+            self.assertEqual(result["component_cost_ns"]["retry_state_mark"], 0)
 
     def test_fast_source_audit(self) -> None:
         completed = subprocess.run([

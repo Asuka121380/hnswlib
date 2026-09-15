@@ -26,6 +26,11 @@ retry control; beta 1.30 no-retry/ef=500 is an aggressive-pruning diagnostic.
    multiplex `running_ratio`; unsupported events do not abort the run.
 5. Run `analyze_p0_attribution.py` to join ordered latency, result parity, and
    query metrics. Do not join old sorted latency arrays to query metrics.
+6. Run P0.3 through `submit_component_microbenchmark.sh` on the same named
+   node and resource profile. Use the portable performance build, not the
+   reference/metrics build. Seven isolated blocks report medians and block
+   confidence intervals. Evaluate primary and retry matched pairs separately;
+   pass each matched baseline summary to `evaluate_break_even.py`.
 
 All P0 configs require the Python orchestrator to observe exactly one allowed
 CPU. `run_qps_matrix.slurm` launches it through `srun --cpu-bind=threads
@@ -77,6 +82,22 @@ bash scripts/v0/performance_ready/submit_quality_experiment.sh \
   --time-limit 01:00:00 --memory 24G \
   --run-root "$HOME/IndividualProject/results/v0_performance_ready/p0-attribution-quality-testing-portable-$(git rev-parse --short=7 HEAD)"
 ```
+
+Example P0.3 submission matching that environment:
+
+```text
+PERFORMANCE_BUILD="$PWD/build-v0-performance-portable-$(git rev-parse --short=7 HEAD)" \
+bash scripts/v0/performance_ready/submit_component_microbenchmark.sh \
+  --resource-profile exploratory-shared \
+  --partition testing --qos normal --nodelist gpusrv-2 \
+  --time-limit 00:10:00 --memory 24G \
+  --run-root "$HOME/IndividualProject/results/v0_performance_ready/p0-component-microbenchmark-testing-portable-$(git rev-parse --short=7 HEAD)"
+```
+
+The submission wrapper removes inherited `LD_LIBRARY_PATH` before `sbatch`.
+This is part of the P0 environment contract: it prevents a login-shell CMake
+module from injecting an older `libstdc++` into a runner built by the system
+compiler.
 
 The formal and PMU runs must use different run roots. A failed PMU capability
 probe is recorded as an unavailable diagnostic; it must not be converted into
