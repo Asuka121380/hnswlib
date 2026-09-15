@@ -35,7 +35,10 @@ def main() -> int:
         "HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING": "ON",
     }
     if args.contract == "reference":
-        required["HNSWLIB_ENABLE_V0_STRICT_FP_CONTRACT"] = "ON"
+        required.update({
+            "HNSWLIB_ENABLE_V0_STRICT_FP_CONTRACT": "ON",
+            "HNSWLIB_ENABLE_NATIVE_ARCH": "OFF",
+        })
     else:
         required.update({
             "HNSWLIB_ENABLE_V0_STRICT_FP_CONTRACT": "OFF",

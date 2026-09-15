@@ -15,6 +15,11 @@ retry control; beta 1.30 no-retry/ef=500 is an aggressive-pruning diagnostic.
 3. Run the existing quality matrix with the updated reference build to obtain
    per-query active and baseline work ledgers. The ledger now includes graph,
    exact, duplicate, candidate/result queue, and threshold-update counts.
+   The P0 quality configuration includes carrier cases for matched baselines
+   ef=360 and ef=435; baseline ef=500 is emitted by every ef=500 active case.
+   Submit this matrix on the same named node and resource profile as the P0
+   timing run. The reference build must disable native architecture flags so
+   it is executable on that node.
 4. Submit `p0_attribution_pmu.json` as a separate diagnostic pass. PMU results
    are not formal QPS: enabling/disabling counters makes syscalls at the timed
    region boundaries. Each event reports `available`, `error_number`, and a
@@ -59,6 +64,18 @@ python scripts/v0/performance_ready/analyze_p0_attribution.py \
   --ground-truth-ivecs DATA/gist_groundtruth.ivecs \
   --quality-summary approx-no-retry-beta1p45-legacy-ef500=QUALITY/quality/approx-no-retry-beta1p45-ef500/summary.json \
   --output-dir RESULTS/p0-analysis
+```
+
+Example P0 quality submission matching the exploratory testing environment:
+
+```text
+REFERENCE_BUILD="$PWD/build-v0-approx-reference-portable-$(git rev-parse --short=7 HEAD)" \
+bash scripts/v0/performance_ready/submit_quality_experiment.sh \
+  --config configs/v0/qps/p0_attribution_quality.json \
+  --resource-profile exploratory-shared \
+  --partition testing --qos normal --nodelist gpusrv-2 \
+  --time-limit 01:00:00 --memory 24G \
+  --run-root "$HOME/IndividualProject/results/v0_performance_ready/p0-attribution-quality-testing-portable-$(git rev-parse --short=7 HEAD)"
 ```
 
 The formal and PMU runs must use different run roots. A failed PMU capability

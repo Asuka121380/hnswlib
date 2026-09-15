@@ -7,6 +7,8 @@ import argparse
 import csv
 import hashlib
 import json
+import os
+import platform
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +41,39 @@ def atomic_json(path: Path, value: object) -> None:
     temporary.write_text(
         json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def require_single_cpu_affinity(resolved: dict[str, Any]) -> list[int]:
+    if not resolved.get("require_single_cpu_affinity", False):
+        return []
+    if not hasattr(os, "sched_getaffinity"):
+        raise SystemExit("single-CPU affinity is required but cannot be observed")
+    allowed = sorted(os.sched_getaffinity(0))
+    if len(allowed) != 1:
+        raise SystemExit(
+            "single-CPU affinity is required; allowed CPUs are " +
+            ",".join(str(cpu) for cpu in allowed))
+    return allowed
+
+
+def resource_observation(resource_profile: str, allowed_cpus: list[int]) -> dict[str, Any]:
+    return {
+        "resource_profile": resource_profile,
+        "claim_scope": ("formal" if resource_profile == "formal-exclusive"
+                        else "exploratory"),
+        "exclusive": resource_profile == "formal-exclusive",
+        "host": platform.node(),
+        "allowed_cpus": allowed_cpus,
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+        "slurm_job_partition": os.environ.get("SLURM_JOB_PARTITION"),
+        "slurm_job_qos": os.environ.get("SLURM_JOB_QOS"),
+        "slurm_job_nodelist": os.environ.get("SLURM_JOB_NODELIST"),
+        "slurm_cpus_per_task": os.environ.get("SLURM_CPUS_PER_TASK"),
+        "slurm_mem_per_node": os.environ.get("SLURM_MEM_PER_NODE"),
+        "slurm_cpu_bind": os.environ.get("SLURM_CPU_BIND"),
+        "numa_policy": "slurm-mem-bind-local",
+        "observed_utc": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def active_quality_cases(resolved: dict[str, Any]) -> list[dict[str, Any]]:
@@ -90,6 +125,8 @@ def summary_row(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--resource-profile", required=True,
+                        choices=("formal-exclusive", "exploratory-shared"))
     parser.add_argument("--runner", required=True, type=Path)
     parser.add_argument("--dataset-config", required=True, type=Path)
     parser.add_argument("--index-path", required=True, type=Path)
@@ -104,13 +141,14 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
-        requested, resolved = load_config(args.config)
+        requested, resolved = load_config(args.config, args.resource_profile)
     except ConfigError as error:
         raise SystemExit(f"invalid quality configuration: {error}") from error
     required = (args.runner, args.dataset_config, args.index_path, args.sidecar_path)
     for path in required:
         if not path.is_file():
             raise SystemExit(f"missing input: {path}")
+    allowed_cpus = require_single_cpu_affinity(resolved)
     cases = active_quality_cases(resolved)
     if not cases:
         raise SystemExit("quality matrix requires at least one active case")
@@ -140,6 +178,8 @@ def main() -> int:
             "schema_version": 1, "status": "running",
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "contract": contract, "completed": [],
+            "resource_observations": [resource_observation(
+                args.resource_profile, allowed_cpus)],
         }
         atomic_json(manifest_path, manifest)
 

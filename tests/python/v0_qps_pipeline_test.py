@@ -407,6 +407,28 @@ class P0AttributionAnalysisTest(unittest.TestCase):
 
 
 class MatchedRecallPipelineTest(unittest.TestCase):
+    def test_p0_quality_has_carriers_for_all_formal_baselines(self) -> None:
+        config_module = load_module(
+            "qps_config_p0_quality_tested", SCRIPTS / "qps_config.py")
+        quality_module = load_module(
+            "run_quality_matrix_p0_quality_tested",
+            SCRIPTS / "run_quality_matrix.py")
+        _, resolved = config_module.load_config(
+            ROOT / "configs" / "v0" / "qps" /
+            "p0_attribution_quality.json",
+            "exploratory-shared",
+        )
+        cases = quality_module.active_quality_cases(resolved)
+        self.assertEqual(len(cases), 5)
+        self.assertTrue(resolved["require_single_cpu_affinity"])
+        carrier_efs = {
+            int(case["ef_search"])
+            for case in cases
+            if case["method"] == "approx-no-retry" and
+            str(case["beta"]) == "1.55"
+        }
+        self.assertEqual(carrier_efs, {360, 435})
+
     def test_quality_cases_collapse_prefetch(self) -> None:
         config_module = load_module(
             "qps_config_quality_tested", SCRIPTS / "qps_config.py")
@@ -457,12 +479,17 @@ class MatchedRecallPipelineTest(unittest.TestCase):
 
             with mock.patch.object(sys, "argv", [
                     "run_quality_matrix.py", "--config", str(config),
+                    "--resource-profile", "exploratory-shared",
                     "--runner", str(root / "runner"), "--dataset-config",
                     str(root / "dataset.json"), "--index-path",
                     str(root / "index.bin"), "--sidecar-path",
                     str(root / "sidecar.bin"), "--run-root", str(run_root),
                     "--experiment-commit", "abc", "--git-branch", "test",
                 ]), mock.patch.object(
+                    quality_module.os, "sched_getaffinity",
+                    return_value={7}, create=True), mock.patch.object(
+                    quality_module.platform, "node",
+                    return_value="test-node"), mock.patch.object(
                     quality_module.subprocess, "run", side_effect=fake_run):
                 self.assertEqual(quality_module.main(), 0)
             with (run_root / "quality_summary.csv").open(

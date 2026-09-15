@@ -13,6 +13,7 @@
   "blocks": 1,
   "seed": 20260914,
   "include_baseline": false,
+  "require_single_cpu_affinity": true,
   "cases": [
     {
       "id": "main-active-ledger",
@@ -34,6 +35,13 @@
       "beta": 1.30,
       "prefetch": "legacy",
       "ef_search": 500
+    },
+    {
+      "id": "baseline-ef360-carrier",
+      "method": "approx-no-retry",
+      "beta": 1.55,
+      "prefetch": "legacy",
+      "ef_search": 360
     },
     {
       "id": "baseline-ef435-carrier",

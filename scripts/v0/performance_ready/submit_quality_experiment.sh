@@ -4,15 +4,18 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-Usage: submit_quality_experiment.sh --config PATH --partition NAME --qos NAME
+Usage: submit_quality_experiment.sh --config PATH --resource-profile PROFILE
+       --partition NAME --qos NAME --nodelist NAME
        --time-limit LIMIT --memory SIZE
        [--run-root PATH] [--resume] [--dry-run]
 EOF
 }
 
 config_path=""
+resource_profile=""
 partition=""
 qos=""
+nodelist=""
 time_limit=""
 memory=""
 run_root=""
@@ -21,8 +24,10 @@ dry_run=0
 while (( $# > 0 )); do
   case "$1" in
     --config) config_path="${2:-}"; shift 2 ;;
+    --resource-profile) resource_profile="${2:-}"; shift 2 ;;
     --partition) partition="${2:-}"; shift 2 ;;
     --qos) qos="${2:-}"; shift 2 ;;
+    --nodelist) nodelist="${2:-}"; shift 2 ;;
     --time-limit) time_limit="${2:-}"; shift 2 ;;
     --memory) memory="${2:-}"; shift 2 ;;
     --run-root) run_root="${2:-}"; shift 2 ;;
@@ -32,8 +37,13 @@ while (( $# > 0 )); do
     *) echo "Unknown argument: $1" >&2; usage; exit 2 ;;
   esac
 done
-[[ -n "$config_path" && -n "$partition" && -n "$qos" &&
+[[ -n "$config_path" && -n "$resource_profile" && -n "$partition" &&
+   -n "$qos" && -n "$nodelist" &&
    -n "$time_limit" && -n "$memory" ]] || { usage; exit 2; }
+case "$resource_profile" in
+  formal-exclusive|exploratory-shared) ;;
+  *) echo "Unknown resource profile: $resource_profile" >&2; exit 2 ;;
+esac
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
@@ -53,13 +63,7 @@ if [[ -n "$(git -C "$repo_root" status --porcelain)" ]]; then
   exit 2
 fi
 analysis_python="${ANALYSIS_PYTHON:-$HOME/IndividualProject/envs/baseline-trace-py312-v2/bin/python}"
-if [[ -n "${REFERENCE_BUILD:-}" ]]; then
-  reference_build="$REFERENCE_BUILD"
-elif [[ -x "$repo_root/build-v0-approx-reference-15820d5/v0_search_runner" ]]; then
-  reference_build="$repo_root/build-v0-approx-reference-15820d5"
-else
-  reference_build="$repo_root/build-v0-approx-reference"
-fi
+reference_build="${REFERENCE_BUILD:-$repo_root/build-v0-approx-reference-portable-${short_commit}}"
 dataset_config="${DATASET_CONFIG:-$HOME/IndividualProject/datasets/gist1m/dataset.json}"
 index_path="${INDEX_PATH:-$HOME/IndividualProject/datasets/gist1m/indexes/gist1m_M16_efc200_seed42_gitfd11efdb86c6.bin}"
 sidecar_path="${SIDECAR_PATH:-$HOME/IndividualProject/results/v0_offline/gist1m/20260726-98c5595-strict/gist1m_m32_nbits8_strict.v0meta}"
@@ -68,7 +72,8 @@ for required in "$analysis_python" "$reference_build/v0_search_runner" \
     "$reference_build/CMakeCache.txt" "$dataset_config" "$index_path" "$sidecar_path"; do
   [[ -e "$required" ]] || { echo "Missing required input: $required" >&2; exit 2; }
 done
-"$analysis_python" "$script_dir/qps_config.py" --config "$config_path"
+"$analysis_python" "$script_dir/qps_config.py" \
+  --config "$config_path" --resource-profile "$resource_profile"
 
 if [[ -z "$run_root" ]]; then
   run_root="$HOME/IndividualProject/results/v0_performance_ready/quality-${short_commit}-$(date +%Y%m%d-%H%M%S)"
@@ -84,7 +89,8 @@ fi
 
 echo "commit=$actual_commit branch=$branch"
 echo "config=$config_path"
-echo "partition=$partition qos=$qos time_limit=$time_limit memory=$memory"
+echo "resource_profile=$resource_profile"
+echo "partition=$partition qos=$qos nodelist=$nodelist time_limit=$time_limit memory=$memory"
 echo "run_root=$run_root"
 echo "reference_build=$reference_build"
 if (( dry_run == 1 )); then
@@ -94,16 +100,23 @@ fi
 command -v sbatch >/dev/null || { echo "Missing sbatch" >&2; exit 2; }
 mkdir -p "$run_root/logs"
 export REPO_ROOT="$repo_root" RUN_ROOT="$run_root" CONFIG_PATH="$config_path"
+export RESOURCE_PROFILE="$resource_profile" REQUESTED_NODELIST="$nodelist"
 export EXPECTED_COMMIT="$actual_commit" REFERENCE_BUILD="$reference_build"
 export ANALYSIS_PYTHON="$analysis_python" DATASET_CONFIG="$dataset_config"
 export INDEX_PATH="$index_path" SIDECAR_PATH="$sidecar_path" RESUME="$resume"
-job_id="$(sbatch --parsable --partition="$partition" --qos="$qos" \
+sbatch_args=(--parsable --partition="$partition" --qos="$qos" \
+  --nodelist="$nodelist" \
   --cpus-per-task=1 --mem="$memory" --time="$time_limit" --export=ALL \
   --output="$run_root/logs/quality_%j.out" \
-  --error="$run_root/logs/quality_%j.err" "$script_dir/run_quality_matrix.slurm")"
-printf 'git_commit=%q\njob_id=%q\nrun_root=%q\nconfig_path=%q\npartition=%q\nqos=%q\ntime_limit=%q\nmemory=%q\n' \
+  --error="$run_root/logs/quality_%j.err")
+if [[ "$resource_profile" == "formal-exclusive" ]]; then
+  sbatch_args+=(--exclusive)
+fi
+job_id="$(sbatch "${sbatch_args[@]}" "$script_dir/run_quality_matrix.slurm")"
+printf 'git_commit=%q\njob_id=%q\nrun_root=%q\nconfig_path=%q\nresource_profile=%q\npartition=%q\nqos=%q\nnodelist=%q\ntime_limit=%q\nmemory=%q\n' \
   "$actual_commit" "$job_id" "$run_root" "$config_path" \
-  "$partition" "$qos" "$time_limit" "$memory" > "$run_root/submission.env"
+  "$resource_profile" "$partition" "$qos" "$nodelist" \
+  "$time_limit" "$memory" > "$run_root/submission.env"
 echo "QUALITY_JOB=$job_id"
 echo "RUN_ROOT=$run_root"
 echo "MONITOR: squeue -j $job_id"
