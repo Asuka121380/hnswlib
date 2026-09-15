@@ -43,8 +43,8 @@ with these metrics compiled out.
 
 ## Verified builds
 
-- `build-v0-performance-ready`: Release, `-O3 -march=native`, strict FP OFF,
-  trace/shadow/validation OFF, comparable flags ON.
+- `build-v0-performance-ready`: Release, `-O3`, native-architecture flags OFF,
+  strict FP OFF, trace/shadow/validation OFF, comparable flags ON.
 - `build-v0-approx-reference`: Release, strict FP ON, shadow and approximate
   shadow ON.
 - `build-v0-off`: V0 disabled; baseline example and search test compile.

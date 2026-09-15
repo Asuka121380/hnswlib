@@ -40,6 +40,7 @@ def main() -> int:
         required.update({
             "HNSWLIB_ENABLE_V0_STRICT_FP_CONTRACT": "OFF",
             "HNSWLIB_PERFORMANCE_COMPARABLE_FLAGS": "ON",
+            "HNSWLIB_ENABLE_NATIVE_ARCH": "OFF",
             "HNSWLIB_ENABLE_BASELINE_TRACE": "OFF",
             "HNSWLIB_ENABLE_V0_SHADOW_VALIDATION": "OFF",
             "HNSWLIB_ENABLE_V0_APPROX_SHADOW": "OFF",

@@ -4,7 +4,9 @@ The performance build deliberately keeps the V0 feature compiled in for every
 method. `baseline`, `approx-no-retry`, and `approx-retry` are selected at run
 time in the same executable, so compiler flags, index loading, query loading,
 timing, and result serialization are identical. The baseline method does not
-load or access a sidecar.
+load or access a sidecar. Cluster timing builds must set
+`HNSWLIB_ENABLE_NATIVE_ARCH=OFF`: a binary compiled with `-march=native` can
+raise `SIGILL` when the scheduler moves it to a different CPU model.
 
 Before collecting timing data, validate the fresh build directory:
 
