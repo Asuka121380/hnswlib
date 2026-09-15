@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=v0-qps-matrix
-#SBATCH --account=db4ai
-#SBATCH --partition=db4ai
-#SBATCH --qos=db4ai
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --hint=nomultithread
 #SBATCH --mem=32G
-#SBATCH --time=08:00:00
+
+# Account, partition, QoS, and time limit are intentionally supplied by
+# submit_qps_experiment.sh. Keeping site-specific defaults here can silently
+# route a formal experiment to the wrong node class.
 
 set -euo pipefail
 
@@ -65,6 +65,10 @@ echo "start=$(date --iso-8601=seconds)"
 echo "commit=$actual_commit"
 echo "config=$CONFIG_PATH"
 echo "resource_profile=$RESOURCE_PROFILE"
+echo "slurm_job_account=${SLURM_JOB_ACCOUNT:-unavailable}"
+echo "slurm_job_partition=${SLURM_JOB_PARTITION:-unavailable}"
+echo "slurm_job_qos=${SLURM_JOB_QOS:-unavailable}"
+echo "slurm_timelimit=${SLURM_TIMELIMIT:-unavailable}"
 echo "slurm_cpus_per_task=${SLURM_CPUS_PER_TASK:-unavailable}"
 echo "slurm_cpus_on_node=${SLURM_CPUS_ON_NODE:-unavailable}"
 echo "slurm_job_cpus_per_node=${SLURM_JOB_CPUS_PER_NODE:-unavailable}"

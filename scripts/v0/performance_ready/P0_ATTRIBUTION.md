@@ -35,7 +35,8 @@ python scripts/v0/performance_ready/qps_config.py \
 
 bash scripts/v0/performance_ready/submit_qps_experiment.sh \
   --config configs/v0/qps/p0_attribution_formal.json \
-  --resource-profile formal-exclusive --dry-run
+  --resource-profile formal-exclusive \
+  --partition normal --qos normal --time-limit 00:15:00 --dry-run
 ```
 
 Example analysis:

@@ -108,6 +108,8 @@ Use `submit_qps_experiment.sh` for new targeted or exploratory QPS matrices.
 Its only algorithm-parameter source is a version-controlled JSON contract.
 The contract can define either a Cartesian product of `betas`, `modes`, and
 `prefetches`, or an explicit `cases` array; mixing the two forms is rejected.
+Partition, QoS, and time limit are mandatory submission arguments so a stale
+site-specific `#SBATCH` default cannot silently select a different node class.
 
 Validate the formal ef500 targeted contract without submitting a job:
 
@@ -119,6 +121,7 @@ python scripts/v0/performance_ready/qps_config.py \
 bash scripts/v0/performance_ready/submit_qps_experiment.sh \
   --config configs/v0/qps/ef500_targeted.json \
   --resource-profile formal-exclusive \
+  --partition normal --qos normal --time-limit 00:15:00 \
   --dry-run
 ```
 
@@ -134,6 +137,7 @@ Use the shared profile only for exploratory screening:
 bash scripts/v0/performance_ready/submit_qps_experiment.sh \
   --config configs/v0/qps/beta_130_140_scan.json \
   --resource-profile exploratory-shared \
+  --partition normal --qos normal --time-limit 00:15:00 \
   --dry-run
 ```
 
@@ -151,6 +155,7 @@ name is useful:
 bash scripts/v0/performance_ready/submit_qps_experiment.sh \
   --config configs/v0/qps/ef500_targeted.json \
   --resource-profile formal-exclusive \
+  --partition PARTITION --qos QOS --time-limit LIMIT \
   --run-root "$HOME/IndividualProject/results/v0_performance_ready/ef500-targeted-v1"
 ```
 
@@ -161,6 +166,7 @@ resource profile, commit, runner, CMake cache, and input-file identities:
 bash scripts/v0/performance_ready/submit_qps_experiment.sh \
   --config configs/v0/qps/ef500_targeted.json \
   --resource-profile formal-exclusive \
+  --partition PARTITION --qos QOS --time-limit LIMIT \
   --run-root "$HOME/IndividualProject/results/v0_performance_ready/ef500-targeted-v1" \
   --resume
 ```

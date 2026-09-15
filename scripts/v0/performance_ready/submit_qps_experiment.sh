@@ -10,6 +10,9 @@ Usage:
 Required:
   --config PATH
   --resource-profile formal-exclusive|exploratory-shared
+  --partition NAME
+  --qos NAME
+  --time-limit LIMIT
 
 Options:
   --run-root PATH   Explicit output root.
@@ -20,6 +23,9 @@ EOF
 
 config_path=""
 resource_profile=""
+partition=""
+qos=""
+time_limit=""
 run_root=""
 resume=0
 dry_run=0
@@ -33,6 +39,21 @@ while (( $# > 0 )); do
     --resource-profile)
       [[ $# -ge 2 ]] || { usage; exit 2; }
       resource_profile="$2"
+      shift 2
+      ;;
+    --partition)
+      [[ $# -ge 2 ]] || { usage; exit 2; }
+      partition="$2"
+      shift 2
+      ;;
+    --qos)
+      [[ $# -ge 2 ]] || { usage; exit 2; }
+      qos="$2"
+      shift 2
+      ;;
+    --time-limit)
+      [[ $# -ge 2 ]] || { usage; exit 2; }
+      time_limit="$2"
       shift 2
       ;;
     --run-root)
@@ -60,7 +81,8 @@ while (( $# > 0 )); do
   esac
 done
 
-if [[ -z "$config_path" || -z "$resource_profile" ]]; then
+if [[ -z "$config_path" || -z "$resource_profile" ||
+      -z "$partition" || -z "$qos" || -z "$time_limit" ]]; then
   usage
   exit 2
 fi
@@ -170,9 +192,11 @@ done
 sbatch_args=(
   --parsable
   --job-name="v0-qps-${resource_profile}"
+  --partition="$partition"
+  --qos="$qos"
   --cpus-per-task=1
   --mem=32G
-  --time=08:00:00
+  --time="$time_limit"
   --export=ALL
 )
 if [[ "$resource_profile" == "formal-exclusive" ]]; then
@@ -186,6 +210,9 @@ echo "branch=$branch"
 echo "commit=$actual_commit"
 echo "config=$config_path"
 echo "resource_profile=$resource_profile"
+echo "partition=$partition"
+echo "qos=$qos"
+echo "time_limit=$time_limit"
 echo "run_root=$run_root"
 echo "performance_build=$performance_build"
 printf 'sbatch_arguments='
@@ -229,6 +256,9 @@ manifest="$run_root/submission.env"
   printf 'run_root=%q\n' "$run_root"
   printf 'config_path=%q\n' "$config_path"
   printf 'resource_profile=%q\n' "$resource_profile"
+  printf 'partition=%q\n' "$partition"
+  printf 'qos=%q\n' "$qos"
+  printf 'time_limit=%q\n' "$time_limit"
   printf 'resume=%q\n' "$resume"
   printf 'performance_build=%q\n' "$performance_build"
   printf 'index_path=%q\n' "$index_path"

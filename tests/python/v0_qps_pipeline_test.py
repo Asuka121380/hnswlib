@@ -243,6 +243,8 @@ class QpsMatrixIntegrationTest(unittest.TestCase):
             with mock.patch.object(
                     sys, "argv", self._arguments(root, config, run_root)), \
                     mock.patch.object(
+                        runner_module.platform, "platform", return_value="test"), \
+                    mock.patch.object(
                         runner_module.subprocess, "run",
                         side_effect=self._fake_runner):
                 self.assertEqual(runner_module.main(), 0)
