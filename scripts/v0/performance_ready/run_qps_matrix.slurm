@@ -4,9 +4,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --hint=nomultithread
-#SBATCH --mem=32G
 
-# Account, partition, QoS, and time limit are intentionally supplied by
+# Account, partition, QoS, time limit, and memory are intentionally supplied by
 # submit_qps_experiment.sh. Keeping site-specific defaults here can silently
 # route a formal experiment to the wrong node class.
 

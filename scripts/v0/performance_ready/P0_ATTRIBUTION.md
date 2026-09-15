@@ -40,7 +40,8 @@ python scripts/v0/performance_ready/qps_config.py \
 bash scripts/v0/performance_ready/submit_qps_experiment.sh \
   --config configs/v0/qps/p0_attribution_formal.json \
   --resource-profile exploratory-shared \
-  --partition normal --qos normal --time-limit 00:15:00 --dry-run
+  --partition testing --qos normal --time-limit 01:00:00 \
+  --memory 24G --dry-run
 ```
 
 Example analysis:

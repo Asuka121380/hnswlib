@@ -13,6 +13,7 @@ Required:
   --partition NAME
   --qos NAME
   --time-limit LIMIT
+  --memory SIZE
 
 Options:
   --run-root PATH   Explicit output root.
@@ -26,6 +27,7 @@ resource_profile=""
 partition=""
 qos=""
 time_limit=""
+memory=""
 run_root=""
 resume=0
 dry_run=0
@@ -56,6 +58,11 @@ while (( $# > 0 )); do
       time_limit="$2"
       shift 2
       ;;
+    --memory)
+      [[ $# -ge 2 ]] || { usage; exit 2; }
+      memory="$2"
+      shift 2
+      ;;
     --run-root)
       [[ $# -ge 2 ]] || { usage; exit 2; }
       run_root="$2"
@@ -82,7 +89,8 @@ while (( $# > 0 )); do
 done
 
 if [[ -z "$config_path" || -z "$resource_profile" ||
-      -z "$partition" || -z "$qos" || -z "$time_limit" ]]; then
+      -z "$partition" || -z "$qos" || -z "$time_limit" ||
+      -z "$memory" ]]; then
   usage
   exit 2
 fi
@@ -195,7 +203,7 @@ sbatch_args=(
   --partition="$partition"
   --qos="$qos"
   --cpus-per-task=1
-  --mem=32G
+  --mem="$memory"
   --time="$time_limit"
   --export=ALL
 )
@@ -211,6 +219,7 @@ echo "resource_profile=$resource_profile"
 echo "partition=$partition"
 echo "qos=$qos"
 echo "time_limit=$time_limit"
+echo "memory=$memory"
 echo "run_root=$run_root"
 echo "performance_build=$performance_build"
 printf 'sbatch_arguments='
@@ -257,6 +266,7 @@ manifest="$run_root/submission.env"
   printf 'partition=%q\n' "$partition"
   printf 'qos=%q\n' "$qos"
   printf 'time_limit=%q\n' "$time_limit"
+  printf 'memory=%q\n' "$memory"
   printf 'resume=%q\n' "$resume"
   printf 'performance_build=%q\n' "$performance_build"
   printf 'index_path=%q\n' "$index_path"

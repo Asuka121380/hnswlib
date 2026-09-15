@@ -4,7 +4,6 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --hint=nomultithread
-#SBATCH --mem=32G
 
 # Site resource selection is supplied by submit_quality_experiment.sh.
 
