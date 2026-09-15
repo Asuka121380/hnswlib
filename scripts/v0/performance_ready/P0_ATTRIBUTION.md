@@ -25,17 +25,21 @@ retry control; beta 1.30 no-retry/ef=500 is an aggressive-pruning diagnostic.
 All P0 configs require the Python orchestrator to observe exactly one allowed
 CPU. `run_qps_matrix.slurm` launches it through `srun --cpu-bind=cores
 --mem-bind=local`, so the runner inherits the binding before loading the index.
+For iterative bottleneck attribution, run the same frozen designs with
+`exploratory-shared`. This allocates and pins one CPU but permits unrelated jobs
+on the node. The resolved contract records `claim_scope=exploratory`; reserve
+`formal-exclusive` for the final short confirmation of selected candidates.
 
 Example dry runs:
 
 ```text
 python scripts/v0/performance_ready/qps_config.py \
   --config configs/v0/qps/p0_attribution_aa.json \
-  --resource-profile formal-exclusive --json
+  --resource-profile exploratory-shared --json
 
 bash scripts/v0/performance_ready/submit_qps_experiment.sh \
   --config configs/v0/qps/p0_attribution_formal.json \
-  --resource-profile formal-exclusive \
+  --resource-profile exploratory-shared \
   --partition normal --qos normal --time-limit 00:15:00 --dry-run
 ```
 

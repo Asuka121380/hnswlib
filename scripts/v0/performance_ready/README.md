@@ -131,7 +131,8 @@ The submit preview prints `ef_search`, the active configuration count, blocks,
 the expected result count, resource profile, commit, build, and output root.
 Review that preview before removing `--dry-run`.
 
-Use the shared profile only for exploratory screening:
+Use the shared profile for exploratory screening, including a frozen formal
+design whose execution does not need to support a final performance claim:
 
 ```text
 bash scripts/v0/performance_ready/submit_qps_experiment.sh \
@@ -144,9 +145,10 @@ bash scripts/v0/performance_ready/submit_qps_experiment.sh \
 `formal-exclusive` passes `--exclusive` to `sbatch`. The runner remains
 single-threaded, but the exclusive allocation prevents another job from
 contending for the node's caches and memory bandwidth. `exploratory-shared`
-passes `--oversubscribe`, requests one CPU, and must not be used for formal
-speedup claims or mixed with exclusive results. A configuration whose role is
-`formal` is rejected under the shared profile.
+requests one allocated CPU without oversubscribing that CPU; the node may host
+other jobs. Shared results must not be used for precise final speedup claims or
+mixed with exclusive results. A formal design is accepted on shared resources,
+but its resolved `claim_scope` is explicitly downgraded to `exploratory`.
 
 For an actual submission, pass an explicit new root when a stable experiment
 name is useful:
@@ -193,9 +195,14 @@ python scripts/v0/performance_ready/run_quality_matrix.py \
   --experiment-commit COMMIT --git-branch BRANCH
 ```
 
-On the cluster, `submit_quality_experiment.sh --config
-configs/v0/qps/matched_recall_quality_scan.json` submits the same operation and
-writes a resumable quality manifest.
+On the cluster, submit the same operation on a shared node with explicit site
+resources; the wrapper writes a resumable quality manifest:
+
+```text
+bash scripts/v0/performance_ready/submit_quality_experiment.sh \
+  --config configs/v0/qps/matched_recall_quality_scan.json \
+  --partition normal --qos normal --time-limit 00:15:00
+```
 
 The quality scan includes all twelve ef500 beta/retry cases and baseline
 recall observations at ef 200, 250, ..., 500. It collapses prefetch-equivalent

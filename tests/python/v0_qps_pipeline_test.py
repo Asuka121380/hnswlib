@@ -128,13 +128,15 @@ class QpsConfigTest(unittest.TestCase):
         self.assertEqual(first["case_source"], "explicit")
         self.assertEqual(first["expected_result_count"], 6)
 
-    def test_formal_experiment_rejects_shared_resources(self) -> None:
+    def test_formal_design_on_shared_resources_is_exploratory(self) -> None:
         requested = exploratory_config()
         requested["experiment_role"] = "formal"
         requested["blocks"] = 5
         requested["within_process_repeats"] = 5
-        with self.assertRaises(self.module.ConfigError):
-            self.module.resolve_config(requested, "exploratory-shared")
+        resolved = self.module.resolve_config(
+            requested, "exploratory-shared")
+        self.assertFalse(resolved["exclusive"])
+        self.assertEqual(resolved["claim_scope"], "exploratory")
 
     def test_formal_experiment_rejects_hardware_counters(self) -> None:
         requested = exploratory_config()

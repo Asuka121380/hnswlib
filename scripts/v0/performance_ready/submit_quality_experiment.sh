@@ -4,17 +4,24 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-Usage: submit_quality_experiment.sh --config PATH [--run-root PATH] [--resume] [--dry-run]
+Usage: submit_quality_experiment.sh --config PATH --partition NAME --qos NAME
+       --time-limit LIMIT [--run-root PATH] [--resume] [--dry-run]
 EOF
 }
 
 config_path=""
+partition=""
+qos=""
+time_limit=""
 run_root=""
 resume=0
 dry_run=0
 while (( $# > 0 )); do
   case "$1" in
     --config) config_path="${2:-}"; shift 2 ;;
+    --partition) partition="${2:-}"; shift 2 ;;
+    --qos) qos="${2:-}"; shift 2 ;;
+    --time-limit) time_limit="${2:-}"; shift 2 ;;
     --run-root) run_root="${2:-}"; shift 2 ;;
     --resume) resume=1; shift ;;
     --dry-run) dry_run=1; shift ;;
@@ -22,7 +29,8 @@ while (( $# > 0 )); do
     *) echo "Unknown argument: $1" >&2; usage; exit 2 ;;
   esac
 done
-[[ -n "$config_path" ]] || { usage; exit 2; }
+[[ -n "$config_path" && -n "$partition" && -n "$qos" &&
+   -n "$time_limit" ]] || { usage; exit 2; }
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
@@ -73,6 +81,7 @@ fi
 
 echo "commit=$actual_commit branch=$branch"
 echo "config=$config_path"
+echo "partition=$partition qos=$qos time_limit=$time_limit"
 echo "run_root=$run_root"
 echo "reference_build=$reference_build"
 if (( dry_run == 1 )); then
@@ -85,10 +94,13 @@ export REPO_ROOT="$repo_root" RUN_ROOT="$run_root" CONFIG_PATH="$config_path"
 export EXPECTED_COMMIT="$actual_commit" REFERENCE_BUILD="$reference_build"
 export ANALYSIS_PYTHON="$analysis_python" DATASET_CONFIG="$dataset_config"
 export INDEX_PATH="$index_path" SIDECAR_PATH="$sidecar_path" RESUME="$resume"
-job_id="$(sbatch --parsable --output="$run_root/logs/quality_%j.out" \
+job_id="$(sbatch --parsable --partition="$partition" --qos="$qos" \
+  --cpus-per-task=1 --mem=32G --time="$time_limit" --export=ALL \
+  --output="$run_root/logs/quality_%j.out" \
   --error="$run_root/logs/quality_%j.err" "$script_dir/run_quality_matrix.slurm")"
-printf 'git_commit=%q\njob_id=%q\nrun_root=%q\nconfig_path=%q\n' \
-  "$actual_commit" "$job_id" "$run_root" "$config_path" > "$run_root/submission.env"
+printf 'git_commit=%q\njob_id=%q\nrun_root=%q\nconfig_path=%q\npartition=%q\nqos=%q\ntime_limit=%q\n' \
+  "$actual_commit" "$job_id" "$run_root" "$config_path" \
+  "$partition" "$qos" "$time_limit" > "$run_root/submission.env"
 echo "QUALITY_JOB=$job_id"
 echo "RUN_ROOT=$run_root"
 echo "MONITOR: squeue -j $job_id"

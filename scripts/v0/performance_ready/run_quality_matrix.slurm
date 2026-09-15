@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=v0-quality-matrix
-#SBATCH --account=db4ai
-#SBATCH --partition=db4ai
-#SBATCH --qos=db4ai
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=1
 #SBATCH --hint=nomultithread
 #SBATCH --mem=32G
-#SBATCH --time=08:00:00
+
+# Site resource selection is supplied by submit_quality_experiment.sh.
 
 set -euo pipefail
 
@@ -64,4 +62,8 @@ fi
 
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 echo "host=$(hostname) job=${SLURM_JOB_ID:-unavailable} commit=$actual_commit"
+echo "slurm_job_partition=${SLURM_JOB_PARTITION:-unavailable}"
+echo "slurm_job_qos=${SLURM_JOB_QOS:-unavailable}"
+echo "slurm_timelimit=${SLURM_TIMELIMIT:-unavailable}"
+taskset -pc $$ 2>&1 || true
 "$ANALYSIS_PYTHON" "$script_dir/run_quality_matrix.py" "${arguments[@]}"

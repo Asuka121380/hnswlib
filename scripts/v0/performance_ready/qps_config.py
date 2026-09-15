@@ -246,8 +246,6 @@ def resolve_config(
         if resource_profile not in RESOURCE_PROFILES:
             raise ConfigError(
                 f"resource_profile must be one of: {', '.join(RESOURCE_PROFILES)}")
-        if role == "formal" and resource_profile != "formal-exclusive":
-            raise ConfigError("formal experiments require formal-exclusive resources")
 
     include_baseline = requested.get("include_baseline", True)
     if not isinstance(include_baseline, bool):
@@ -336,6 +334,9 @@ def resolve_config(
     if resource_profile is not None:
         resolved["resource_profile"] = resource_profile
         resolved["exclusive"] = resource_profile == "formal-exclusive"
+        resolved["claim_scope"] = (
+            "formal" if role == "formal" and
+            resource_profile == "formal-exclusive" else "exploratory")
     resolved["contract_sha256"] = contract_sha256(resolved)
     return resolved
 
@@ -398,6 +399,7 @@ def main() -> int:
         print(f"experiment={resolved['experiment_name']}")
         print(f"role={resolved['experiment_role']}")
         print(f"resource_profile={resolved.get('resource_profile', 'unbound')}")
+        print(f"claim_scope={resolved.get('claim_scope', 'unbound')}")
         print(f"ef_search={resolved['ef_search']}")
         print(f"active_configurations={resolved['active_configuration_count']}")
         print(f"blocks={resolved['blocks']}")

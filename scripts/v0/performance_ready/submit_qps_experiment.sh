@@ -201,8 +201,6 @@ sbatch_args=(
 )
 if [[ "$resource_profile" == "formal-exclusive" ]]; then
   sbatch_args+=(--exclusive)
-else
-  sbatch_args+=(--oversubscribe)
 fi
 
 echo "===== SUBMISSION PREVIEW ====="
