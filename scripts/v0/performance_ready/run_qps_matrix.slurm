@@ -94,7 +94,10 @@ if [[ "${RESUME:-0}" == "1" ]]; then
   runner_args+=(--resume)
 fi
 
-srun --ntasks=1 --cpus-per-task=1 --cpu-bind=cores --mem-bind=local \
+# Bind to one hardware thread, rather than one physical core.  On SMT hosts a
+# core binding exposes both sibling logical CPUs and violates the experiment's
+# required single-CPU affinity contract.
+srun --ntasks=1 --cpus-per-task=1 --cpu-bind=threads --mem-bind=local \
   "$ANALYSIS_PYTHON" "$script_dir/run_qps_matrix.py" "${runner_args[@]}"
 "$ANALYSIS_PYTHON" "$script_dir/summarize_qps_experiment.py" \
   --run-root "$RUN_ROOT"

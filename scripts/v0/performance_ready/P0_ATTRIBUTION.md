@@ -23,8 +23,10 @@ retry control; beta 1.30 no-retry/ef=500 is an aggressive-pruning diagnostic.
    query metrics. Do not join old sorted latency arrays to query metrics.
 
 All P0 configs require the Python orchestrator to observe exactly one allowed
-CPU. `run_qps_matrix.slurm` launches it through `srun --cpu-bind=cores
---mem-bind=local`, so the runner inherits the binding before loading the index.
+CPU. `run_qps_matrix.slurm` launches it through `srun --cpu-bind=threads
+--mem-bind=local`, so the runner inherits a single logical-CPU binding before
+loading the index. Binding by hardware thread is required on SMT hosts, where a
+physical-core binding exposes both sibling logical CPUs.
 For iterative bottleneck attribution, run the same frozen designs with
 `exploratory-shared`. This allocates and pins one CPU but permits unrelated jobs
 on the node. The resolved contract records `claim_scope=exploratory`; reserve
