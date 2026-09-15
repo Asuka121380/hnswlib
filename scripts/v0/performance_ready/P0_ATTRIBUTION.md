@@ -24,9 +24,10 @@ retry control; beta 1.30 no-retry/ef=500 is an aggressive-pruning diagnostic.
 
 All P0 configs require the Python orchestrator to observe exactly one allowed
 CPU. `run_qps_matrix.slurm` launches it through `srun --cpu-bind=threads
---mem-bind=local`, so the runner inherits a single logical-CPU binding before
-loading the index. Binding by hardware thread is required on SMT hosts, where a
-physical-core binding exposes both sibling logical CPUs.
+--mem-bind=local` and narrows the resulting allocation to its first allowed
+logical CPU with `taskset`, so the runner inherits a single logical-CPU binding
+before loading the index. The explicit narrowing handles clusters that expose
+both SMT siblings despite a one-CPU Slurm request.
 For iterative bottleneck attribution, run the same frozen designs with
 `exploratory-shared`. This allocates and pins one CPU but permits unrelated jobs
 on the node. The resolved contract records `claim_scope=exploratory`; reserve

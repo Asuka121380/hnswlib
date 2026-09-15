@@ -76,6 +76,20 @@ if command -v scontrol >/dev/null 2>&1 && [[ -n "${SLURM_JOB_ID:-}" ]]; then
   scontrol show job -dd "$SLURM_JOB_ID" || true
 fi
 
+# Some clusters allocate a physical core as one Slurm CPU while exposing both
+# SMT siblings in the task affinity mask, even with --cpus-per-task=1 and
+# --cpu-bind=threads.  Select one logical CPU from the job's allowed mask and
+# narrow the Python process explicitly.  This remains inside the Slurm
+# allocation and makes the single-CPU experiment contract portable.
+allowed_cpu_list="$(awk '$1 == "Cpus_allowed_list:" {print $2}' /proc/self/status)"
+logical_cpu="${allowed_cpu_list%%,*}"
+logical_cpu="${logical_cpu%%-*}"
+if [[ ! "$logical_cpu" =~ ^[0-9]+$ ]]; then
+  echo "unable to select one logical CPU from affinity list: $allowed_cpu_list" >&2
+  exit 1
+fi
+echo "selected_logical_cpu=$logical_cpu"
+
 runner_args=(
   --config "$CONFIG_PATH"
   --resource-profile "$RESOURCE_PROFILE"
@@ -98,6 +112,7 @@ fi
 # core binding exposes both sibling logical CPUs and violates the experiment's
 # required single-CPU affinity contract.
 srun --ntasks=1 --cpus-per-task=1 --cpu-bind=threads --mem-bind=local \
+  taskset --cpu-list "$logical_cpu" \
   "$ANALYSIS_PYTHON" "$script_dir/run_qps_matrix.py" "${runner_args[@]}"
 "$ANALYSIS_PYTHON" "$script_dir/summarize_qps_experiment.py" \
   --run-root "$RUN_ROOT"
