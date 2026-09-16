@@ -77,6 +77,27 @@ class QpsConfigTest(unittest.TestCase):
         self.assertTrue(resolved["require_single_cpu_affinity"])
         self.assertFalse(resolved["hardware_counters"])
 
+    def test_p0_prefetch_ab_is_a_fifteen_process_single_factor_design(self) -> None:
+        _, resolved = self.module.load_config(
+            ROOT / "configs" / "v0" / "qps" / "p0_prefetch_ab.json",
+            "exploratory-shared",
+        )
+        self.assertEqual(resolved["configuration_count"], 3)
+        self.assertEqual(resolved["expected_result_count"], 15)
+        self.assertEqual(resolved["claim_scope"], "exploratory")
+        self.assertTrue(resolved["emit_latency_records"])
+        self.assertTrue(resolved["emit_result_records"])
+        active = [
+            case for case in resolved["cases"]
+            if case["method"] != "baseline"
+        ]
+        self.assertEqual({case["prefetch"] for case in active},
+                         {"legacy", "gate"})
+        self.assertEqual({case["beta"] for case in active}, {"1.45"})
+        self.assertEqual({case["ef_search"] for case in active}, {500})
+        self.assertEqual({case["baseline_id"] for case in active},
+                         {"baseline-ef435"})
+
     def test_exploratory_scan_resolves_to_63_results(self) -> None:
         _, resolved = self.module.load_config(
             ROOT / "configs" / "v0" / "qps" / "beta_130_140_scan.json",
@@ -360,6 +381,8 @@ class P0AttributionAnalysisTest(unittest.TestCase):
             root = Path(directory)
             latency_dir = root / "latency_records"
             latency_dir.mkdir()
+            result_records_dir = root / "result_records"
+            result_records_dir.mkdir()
             qps_dir = root / "qps"
             qps_dir.mkdir()
             completed = []
@@ -376,7 +399,13 @@ class P0AttributionAnalysisTest(unittest.TestCase):
                 qps_path = qps_dir / f"{config}.json"
                 qps_path.write_text(json.dumps({
                     "qps": 110.0 if config == "edgepq" else 100.0,
+                    "result_checksum": "same-top-k",
                 }), encoding="utf-8")
+                result_path = result_records_dir / f"{config}.csv"
+                result_path.write_text(
+                    "query_id,rank,label,distance\n"
+                    "0,0,1,1.0\n1,0,2,2.0\n",
+                    encoding="utf-8")
                 completed.append({
                     "run_id": config,
                     "block": block,
@@ -386,6 +415,9 @@ class P0AttributionAnalysisTest(unittest.TestCase):
                     "artifacts": [{
                         "path": str(path.relative_to(root)),
                         "sha256": analysis.sha256(path),
+                    }, {
+                        "path": str(result_path.relative_to(root)),
+                        "sha256": analysis.sha256(result_path),
                     }],
                 })
             (root / "manifest.json").write_text(json.dumps({
@@ -403,6 +435,10 @@ class P0AttributionAnalysisTest(unittest.TestCase):
                 encoding="utf-8"))
             self.assertTrue(report["single_cpu_affinity_observed"])
             self.assertEqual(report["pairs"][0]["queries"], 2)
+            self.assertEqual(report["pairs"][0]["paired_result_queries"], 2)
+            self.assertTrue(
+                report["pairs"][0]["top_k_label_sets_identical"])
+            self.assertTrue(report["pairs"][0]["result_checksums_identical"])
             self.assertTrue((output / "query_attribution.csv").is_file())
 
 

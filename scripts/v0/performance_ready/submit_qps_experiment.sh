@@ -12,6 +12,7 @@ Required:
   --resource-profile formal-exclusive|exploratory-shared
   --partition NAME
   --qos NAME
+  --nodelist NAME
   --time-limit LIMIT
   --memory SIZE
 
@@ -26,6 +27,7 @@ config_path=""
 resource_profile=""
 partition=""
 qos=""
+nodelist=""
 time_limit=""
 memory=""
 run_root=""
@@ -51,6 +53,11 @@ while (( $# > 0 )); do
     --qos)
       [[ $# -ge 2 ]] || { usage; exit 2; }
       qos="$2"
+      shift 2
+      ;;
+    --nodelist)
+      [[ $# -ge 2 ]] || { usage; exit 2; }
+      nodelist="$2"
       shift 2
       ;;
     --time-limit)
@@ -89,7 +96,7 @@ while (( $# > 0 )); do
 done
 
 if [[ -z "$config_path" || -z "$resource_profile" ||
-      -z "$partition" || -z "$qos" || -z "$time_limit" ||
+      -z "$partition" || -z "$qos" || -z "$nodelist" || -z "$time_limit" ||
       -z "$memory" ]]; then
   usage
   exit 2
@@ -176,13 +183,7 @@ elif [[ -e "$run_root" ]]; then
   exit 2
 fi
 
-if [[ -n "${PERFORMANCE_BUILD:-}" ]]; then
-  performance_build="$PERFORMANCE_BUILD"
-elif [[ -x "$repo_root/build-v0-performance-ready-15820d5/v0_performance_runner" ]]; then
-  performance_build="$repo_root/build-v0-performance-ready-15820d5"
-else
-  performance_build="$repo_root/build-v0-performance-ready"
-fi
+performance_build="${PERFORMANCE_BUILD:-$repo_root/build-v0-performance-portable-${short_commit}}"
 index_path="${INDEX_PATH:-$HOME/IndividualProject/datasets/gist1m/indexes/gist1m_M16_efc200_seed42_gitfd11efdb86c6.bin}"
 sidecar_path="${SIDECAR_PATH:-$HOME/IndividualProject/results/v0_offline/gist1m/20260726-98c5595-strict/gist1m_m32_nbits8_strict.v0meta}"
 query_path="${QUERY_PATH:-$HOME/IndividualProject/datasets/gist1m/gist/gist_query.fvecs}"
@@ -202,6 +203,7 @@ sbatch_args=(
   --job-name="v0-qps-${resource_profile}"
   --partition="$partition"
   --qos="$qos"
+  --nodelist="$nodelist"
   --cpus-per-task=1
   --mem="$memory"
   --time="$time_limit"
@@ -218,10 +220,12 @@ echo "config=$config_path"
 echo "resource_profile=$resource_profile"
 echo "partition=$partition"
 echo "qos=$qos"
+echo "nodelist=$nodelist"
 echo "time_limit=$time_limit"
 echo "memory=$memory"
 echo "run_root=$run_root"
 echo "performance_build=$performance_build"
+echo "submission_environment=LD_LIBRARY_PATH removed before sbatch"
 printf 'sbatch_arguments='
 printf ' %q' "${sbatch_args[@]}"
 printf '\n'
@@ -235,6 +239,7 @@ export REPO_ROOT="$repo_root"
 export RUN_ROOT="$run_root"
 export CONFIG_PATH="$config_path"
 export RESOURCE_PROFILE="$resource_profile"
+export REQUESTED_NODELIST="$nodelist"
 export EXPECTED_COMMIT="$actual_commit"
 export PERFORMANCE_BUILD="$performance_build"
 export ANALYSIS_PYTHON="$analysis_python"
@@ -247,7 +252,7 @@ export CPU_FREQUENCY_POLICY="${CPU_FREQUENCY_POLICY:-cluster-default-unverified}
 export RESUME="$resume"
 
 job_id="$(
-  sbatch "${sbatch_args[@]}" \
+  env -u LD_LIBRARY_PATH sbatch "${sbatch_args[@]}" \
     --output="$run_root/logs/qps_%j.out" \
     --error="$run_root/logs/qps_%j.err" \
     "$script_dir/run_qps_matrix.slurm"
@@ -265,6 +270,7 @@ manifest="$run_root/submission.env"
   printf 'resource_profile=%q\n' "$resource_profile"
   printf 'partition=%q\n' "$partition"
   printf 'qos=%q\n' "$qos"
+  printf 'nodelist=%q\n' "$nodelist"
   printf 'time_limit=%q\n' "$time_limit"
   printf 'memory=%q\n' "$memory"
   printf 'resume=%q\n' "$resume"

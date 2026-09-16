@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "experiment_name": "p0-primary-prefetch-ab-v1",
+  "experiment_role": "formal",
+  "dataset": "gist1m",
+  "dimension": 960,
+  "query_start": 0,
+  "query_count": 1000,
+  "k": 10,
+  "ef_search": 500,
+  "warmup_queries": 100,
+  "within_process_repeats": 5,
+  "blocks": 5,
+  "seed": 20260914,
+  "include_baseline": false,
+  "emit_latency_records": true,
+  "emit_result_records": true,
+  "require_single_cpu_affinity": true,
+  "cases": [
+    {"id": "baseline-ef435", "method": "baseline", "ef_search": 435},
+    {
+      "id": "approx-no-retry-beta1p45-legacy-ef500",
+      "method": "approx-no-retry",
+      "beta": 1.45,
+      "prefetch": "legacy",
+      "ef_search": 500,
+      "baseline_id": "baseline-ef435"
+    },
+    {
+      "id": "approx-no-retry-beta1p45-gate-ef500",
+      "method": "approx-no-retry",
+      "beta": 1.45,
+      "prefetch": "gate",
+      "ef_search": 500,
+      "baseline_id": "baseline-ef435"
+    }
+  ]
+}

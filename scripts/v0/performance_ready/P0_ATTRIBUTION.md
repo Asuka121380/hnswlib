@@ -31,6 +31,9 @@ retry control; beta 1.30 no-retry/ef=500 is an aggressive-pruning diagnostic.
    reference/metrics build. Seven isolated blocks report medians and block
    confidence intervals. Evaluate primary and retry matched pairs separately;
    pass each matched baseline summary to `evaluate_break_even.py`.
+7. Run P0.4 through `p0_prefetch_ab.json`. It holds beta, retry mode, ef,
+   queries, build, and sidecar fixed while comparing legacy and gate-aware
+   prefetch against the same baseline ef435 in five randomized blocks.
 
 All P0 configs require the Python orchestrator to observe exactly one allowed
 CPU. `run_qps_matrix.slurm` launches it through `srun --cpu-bind=threads
@@ -53,7 +56,8 @@ python scripts/v0/performance_ready/qps_config.py \
 bash scripts/v0/performance_ready/submit_qps_experiment.sh \
   --config configs/v0/qps/p0_attribution_formal.json \
   --resource-profile exploratory-shared \
-  --partition testing --qos normal --time-limit 01:00:00 \
+  --partition testing --qos normal --nodelist gpusrv-2 \
+  --time-limit 01:00:00 \
   --memory 24G --dry-run
 ```
 
@@ -92,6 +96,33 @@ bash scripts/v0/performance_ready/submit_component_microbenchmark.sh \
   --partition testing --qos normal --nodelist gpusrv-2 \
   --time-limit 00:10:00 --memory 24G \
   --run-root "$HOME/IndividualProject/results/v0_performance_ready/p0-component-microbenchmark-testing-portable-$(git rev-parse --short=7 HEAD)"
+```
+
+Example P0.4 dry run matching the P0 testing environment:
+
+```text
+PERFORMANCE_BUILD="$PWD/build-v0-performance-portable-$(git rev-parse --short=7 HEAD)" \
+bash scripts/v0/performance_ready/submit_qps_experiment.sh \
+  --config configs/v0/qps/p0_prefetch_ab.json \
+  --resource-profile exploratory-shared \
+  --partition testing --qos normal --nodelist gpusrv-2 \
+  --time-limit 01:00:00 --memory 24G \
+  --run-root "$HOME/IndividualProject/results/v0_performance_ready/p0-prefetch-ab-testing-portable-$(git rev-parse --short=7 HEAD)" \
+  --dry-run
+```
+
+After the run completes, compare gate directly with legacy as well as both
+active cases with the matched baseline. Supplying the ground truth also checks
+that the performance-run results preserve Recall@10:
+
+```text
+python scripts/v0/performance_ready/analyze_p0_attribution.py \
+  --run-root "$RUN_ROOT" \
+  --pair approx-no-retry-beta1p45-gate-ef500=approx-no-retry-beta1p45-legacy-ef500 \
+  --pair approx-no-retry-beta1p45-legacy-ef500=baseline-ef435 \
+  --pair approx-no-retry-beta1p45-gate-ef500=baseline-ef435 \
+  --ground-truth-ivecs "$HOME/IndividualProject/datasets/gist1m/gist/gist_groundtruth.ivecs" \
+  --output-dir "$RUN_ROOT/analysis"
 ```
 
 The submission wrapper removes inherited `LD_LIBRARY_PATH` before `sbatch`.

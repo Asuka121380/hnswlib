@@ -132,9 +132,11 @@ Use `submit_qps_experiment.sh` for new targeted or exploratory QPS matrices.
 Its only algorithm-parameter source is a version-controlled JSON contract.
 The contract can define either a Cartesian product of `betas`, `modes`, and
 `prefetches`, or an explicit `cases` array; mixing the two forms is rejected.
-Partition, QoS, time limit, and memory are mandatory submission arguments so a
+Partition, QoS, node list, time limit, and memory are mandatory submission arguments so a
 stale site-specific `#SBATCH` default cannot silently select a different node
-class or request more memory than that node provides.
+class, host, or request more memory than that node provides. The wrapper uses
+the current commit's portable build by default and removes inherited
+`LD_LIBRARY_PATH` before `sbatch`.
 
 Validate the formal ef500 targeted contract without submitting a job:
 
@@ -146,7 +148,8 @@ python scripts/v0/performance_ready/qps_config.py \
 bash scripts/v0/performance_ready/submit_qps_experiment.sh \
   --config configs/v0/qps/ef500_targeted.json \
   --resource-profile formal-exclusive \
-  --partition normal --qos normal --time-limit 00:15:00 \
+  --partition normal --qos normal --nodelist NODE \
+  --time-limit 00:15:00 \
   --memory 24G \
   --dry-run
 ```
@@ -164,7 +167,8 @@ design whose execution does not need to support a final performance claim:
 bash scripts/v0/performance_ready/submit_qps_experiment.sh \
   --config configs/v0/qps/beta_130_140_scan.json \
   --resource-profile exploratory-shared \
-  --partition normal --qos normal --time-limit 00:15:00 \
+  --partition normal --qos normal --nodelist NODE \
+  --time-limit 00:15:00 \
   --memory 24G \
   --dry-run
 ```
@@ -184,7 +188,8 @@ name is useful:
 bash scripts/v0/performance_ready/submit_qps_experiment.sh \
   --config configs/v0/qps/ef500_targeted.json \
   --resource-profile formal-exclusive \
-  --partition PARTITION --qos QOS --time-limit LIMIT --memory SIZE \
+  --partition PARTITION --qos QOS --nodelist NODE \
+  --time-limit LIMIT --memory SIZE \
   --run-root "$HOME/IndividualProject/results/v0_performance_ready/ef500-targeted-v1"
 ```
 
@@ -195,7 +200,8 @@ resource profile, commit, runner, CMake cache, and input-file identities:
 bash scripts/v0/performance_ready/submit_qps_experiment.sh \
   --config configs/v0/qps/ef500_targeted.json \
   --resource-profile formal-exclusive \
-  --partition PARTITION --qos QOS --time-limit LIMIT --memory SIZE \
+  --partition PARTITION --qos QOS --nodelist NODE \
+  --time-limit LIMIT --memory SIZE \
   --run-root "$HOME/IndividualProject/results/v0_performance_ready/ef500-targeted-v1" \
   --resume
 ```
@@ -228,7 +234,9 @@ resources; the wrapper writes a resumable quality manifest:
 ```text
 bash scripts/v0/performance_ready/submit_quality_experiment.sh \
   --config configs/v0/qps/matched_recall_quality_scan.json \
-  --partition testing --qos normal --time-limit 01:00:00 --memory 24G
+  --resource-profile exploratory-shared \
+  --partition testing --qos normal --nodelist gpusrv-2 \
+  --time-limit 01:00:00 --memory 24G
 ```
 
 The quality scan includes all twelve ef500 beta/retry cases and baseline

@@ -15,6 +15,7 @@ set -euo pipefail
 : "${RUN_ROOT:?RUN_ROOT is required}"
 : "${CONFIG_PATH:?CONFIG_PATH is required}"
 : "${RESOURCE_PROFILE:?RESOURCE_PROFILE is required}"
+: "${REQUESTED_NODELIST:?REQUESTED_NODELIST is required}"
 : "${EXPECTED_COMMIT:?EXPECTED_COMMIT is required}"
 : "${PERFORMANCE_BUILD:?PERFORMANCE_BUILD is required}"
 : "${ANALYSIS_PYTHON:?ANALYSIS_PYTHON is required}"
@@ -64,6 +65,7 @@ echo "start=$(date --iso-8601=seconds)"
 echo "commit=$actual_commit"
 echo "config=$CONFIG_PATH"
 echo "resource_profile=$RESOURCE_PROFILE"
+echo "requested_nodelist=$REQUESTED_NODELIST"
 echo "slurm_job_account=${SLURM_JOB_ACCOUNT:-unavailable}"
 echo "slurm_job_partition=${SLURM_JOB_PARTITION:-unavailable}"
 echo "slurm_job_qos=${SLURM_JOB_QOS:-unavailable}"
@@ -71,7 +73,12 @@ echo "slurm_timelimit=${SLURM_TIMELIMIT:-unavailable}"
 echo "slurm_cpus_per_task=${SLURM_CPUS_PER_TASK:-unavailable}"
 echo "slurm_cpus_on_node=${SLURM_CPUS_ON_NODE:-unavailable}"
 echo "slurm_job_cpus_per_node=${SLURM_JOB_CPUS_PER_NODE:-unavailable}"
+echo "ld_library_path=${LD_LIBRARY_PATH:-unset}"
 taskset -pc $$ 2>&1 || true
+if [[ "$(hostname -s)" != "$REQUESTED_NODELIST" ]]; then
+  echo "node mismatch: requested $REQUESTED_NODELIST, got $(hostname -s)" >&2
+  exit 2
+fi
 if command -v scontrol >/dev/null 2>&1 && [[ -n "${SLURM_JOB_ID:-}" ]]; then
   scontrol show job -dd "$SLURM_JOB_ID" || true
 fi

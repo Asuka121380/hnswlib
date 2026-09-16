@@ -201,6 +201,21 @@ def read_qps(manifest: dict[str, Any], root: Path) -> dict[str, dict[int, float]
     return result
 
 
+def read_result_checksums(
+    manifest: dict[str, Any], root: Path,
+) -> dict[str, set[str]]:
+    result: dict[str, set[str]] = defaultdict(set)
+    for item in manifest.get("completed", []):
+        path = root / str(item["result"])
+        if not path.is_file() or sha256(path) != item.get("sha256"):
+            raise SystemExit(f"missing or corrupt QPS result: {path}")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        checksum = data.get("result_checksum")
+        if checksum is not None:
+            result[str(item["config"]["id"])].add(str(checksum))
+    return result
+
+
 def read_result_sets(
     manifest: dict[str, Any], root: Path,
 ) -> tuple[dict[str, dict[int, set[int]]], dict[str, bool]]:
@@ -367,6 +382,24 @@ def main() -> int:
         writer.writerows(pair_rows)
 
     result_sets, result_consistency = read_result_sets(manifest, args.run_root)
+    result_checksums = read_result_checksums(manifest, args.run_root)
+    for summary in pair_summary:
+        candidate = str(summary["candidate"])
+        baseline = str(summary["baseline"])
+        common_results = sorted(
+            set(result_sets.get(candidate, {})) &
+            set(result_sets.get(baseline, {})))
+        summary["paired_result_queries"] = len(common_results)
+        summary["top_k_label_sets_identical"] = (
+            all(result_sets[candidate][query_id] ==
+                result_sets[baseline][query_id]
+                for query_id in common_results)
+            if common_results else None)
+        candidate_checksums = result_checksums.get(candidate, set())
+        baseline_checksums = result_checksums.get(baseline, set())
+        summary["result_checksums_identical"] = (
+            candidate_checksums == baseline_checksums
+            if candidate_checksums and baseline_checksums else None)
     recalls: dict[str, float] = {}
     if args.ground_truth_ivecs and result_sets:
         query_ids = {query for values in result_sets.values() for query in values}
