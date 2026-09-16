@@ -94,8 +94,8 @@ V0AllEdgeEncodingMetrics encodeV0AllLayer0Edges(
     const V0AllEdgeEncodingSpec& spec,
     Codec& codec) {
     if (spec.dimension == 0U || spec.pq_m == 0U ||
-        spec.pq_nbits != 8U ||
-        spec.pq_ksub != 256U ||
+        spec.pq_nbits == 0U || spec.pq_nbits > 8U ||
+        spec.pq_ksub != (1U << spec.pq_nbits) ||
         spec.pq_dsub == 0U ||
         spec.dimension != spec.pq_m * spec.pq_dsub ||
         spec.block_size == 0U ||

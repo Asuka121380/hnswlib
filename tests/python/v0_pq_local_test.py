@@ -216,6 +216,26 @@ class V0PQLocalTest(unittest.TestCase):
         self.assertTrue((output / "pq_pilot_summary.csv").is_file())
         self.assertTrue((output / "report.md").is_file())
 
+    def test_low_bit_training_contract(self) -> None:
+        directions, manifest = self._sample()
+        for bits in (1, 4, 6, 8):
+            metrics = self.root / f"check-b{bits}.json"
+            self._run("train_pq_codebook.py", "--directions", directions,
+                "--manifest", manifest, "--M-pq", 2, "--nbits", bits,
+                "--min-points-per-centroid", 1, "--output-metrics", metrics,
+                "--check-input-only")
+            result = json.loads(metrics.read_text())
+            self.assertEqual(1 << bits, result["ksub"])
+            self.assertEqual(2, result["code_size"])
+            self.assertEqual((2 * bits + 7) // 8, result["faiss_packed_code_bytes"])
+        for m, bits in ((0, 6), (3, 6), (2, 0), (2, 9)):
+            run = subprocess.run([sys.executable, str(SCRIPT_DIR / "train_pq_codebook.py"),
+                "--directions", str(directions), "--manifest", str(manifest),
+                "--M-pq", str(m), "--nbits", str(bits), "--output-metrics",
+                str(self.root / "invalid.json"), "--check-input-only"], capture_output=True)
+            self.assertNotEqual(0, run.returncode)
+            self.assertFalse((self.root / "invalid.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

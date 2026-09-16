@@ -155,23 +155,24 @@ int main() {
     testNumericContract();
     std::vector<char> storage;
     const hnswlib::V0Layer0GraphView graph = makeGraph(storage);
-    const std::string path = "v0_all_edge_encoder_test.v0meta";
+    for (unsigned bits : {4U, 6U, 8U}) {
+    const std::string path = "v0_all_edge_encoder_test_b" + std::to_string(bits) + ".v0meta";
     std::remove(path.c_str());
     std::remove((path + ".partial").c_str());
     try {
         hnswlib::V0AllEdgeEncodingSpec spec;
         spec.dimension = 4U;
         spec.pq_m = 2U;
-        spec.pq_nbits = 8U;
-        spec.pq_ksub = 256U;
+        spec.pq_nbits = bits;
+        spec.pq_ksub = 1U << bits;
         spec.pq_dsub = 2U;
         spec.block_size = 2U;
         spec.output_sidecar = path;
         spec.training_metadata_json =
             "{\"quantizer\":\"synthetic\"}";
-        spec.codebook_centroids.assign(1024U, 0.0f);
-        spec.codebook_centroids[(0U * 256U + 1U) * 2U] = 1.0f;
-        spec.codebook_centroids[(0U * 256U + 2U) * 2U] = -1.0f;
+        spec.codebook_centroids.assign(4U * spec.pq_ksub, 0.0f);
+        spec.codebook_centroids[2U] = 1.0f;
+        spec.codebook_centroids[4U] = -1.0f;
         spec.base_index_sha256 = digest("index");
         spec.adjacency_sha256 = graph.adjacencyFingerprint();
 
@@ -220,11 +221,12 @@ int main() {
             "perfect reconstruction error was not rounded upward");
         std::remove(path.c_str());
         std::cout << "v0_all_edge_encoder_test_ok" << std::endl;
-        return 0;
     } catch (...) {
         std::remove(path.c_str());
         std::remove((path + ".partial").c_str());
         throw;
     }
+    }
+    return 0;
 #endif
 }

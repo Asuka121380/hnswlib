@@ -15,6 +15,7 @@
 #include "hnswlib/hnswlib.h"
 #include "hnswlib/edge_quant_v0_codebook.h"
 #include "hnswlib/edge_quant_v0_encoder.h"
+#include "hnswlib/edge_quant_v0_packed_codes.h"
 
 namespace {
 
@@ -231,7 +232,8 @@ class FaissV0Codec {
               codebook.dimension,
               codebook.pq_m,
               codebook.pq_nbits) {
-        if (pq_.code_size != codebook.code_size) {
+        if (codebook.code_size != codebook.pq_m ||
+            pq_.code_size != hnswlib::v0PackedCodeSize(codebook.pq_m, codebook.pq_nbits)) {
             throw std::runtime_error(
                 "Faiss code size does not match V0PQ codebook");
         }
@@ -252,21 +254,45 @@ class FaissV0Codec {
     }
 
     uint32_t codeSize() const {
-        return static_cast<uint32_t>(pq_.code_size);
+        return static_cast<uint32_t>(pq_.M);
     }
 
     void encode(
         const float* vectors,
         size_t count,
         uint8_t* codes) const {
-        pq_.compute_codes(vectors, codes, count);
+        if (pq_.nbits == 8) {
+            pq_.compute_codes(vectors, codes, count);
+        } else {
+            std::vector<uint8_t> packed(count * pq_.code_size);
+            pq_.compute_codes(vectors, packed.data(), count);
+            hnswlib::v0UnpackCodes(packed.data(), count, pq_.M, pq_.nbits, codes);
+        }
     }
 
     void decode(
         const uint8_t* codes,
         size_t count,
         float* vectors) const {
-        pq_.decode(codes, vectors, count);
+        if (pq_.nbits == 8) {
+            pq_.decode(codes, vectors, count);
+        } else {
+            std::vector<uint8_t> packed(count * pq_.code_size);
+            hnswlib::v0PackCodes(codes, count, pq_.M, pq_.nbits, packed.data());
+            pq_.decode(packed.data(), vectors, count);
+            // Verify the layout bridge against Faiss itself, not just a
+            // pack/unpack round trip. Check one full vector per offline block.
+            if (count != 0) {
+                for (size_t m = 0; m < pq_.M; ++m) {
+                    for (size_t d = 0; d < pq_.dsub; ++d) {
+                        if (vectors[m * pq_.dsub + d] !=
+                            pq_.centroids[(m * pq_.ksub + codes[m]) * pq_.dsub + d]) {
+                            throw std::runtime_error("Faiss/V0 low-bit code layout mismatch");
+                        }
+                    }
+                }
+            }
+        }
     }
 
  private:
@@ -386,10 +412,10 @@ int main(int argc, char** argv) {
         }
         const hnswlib::V0PQCodebook codebook =
             hnswlib::loadV0PQCodebook(options.codebook_path);
-        if (codebook.pq_nbits != 8U ||
+        if (codebook.pq_nbits == 0U || codebook.pq_nbits > 8U ||
             codebook.code_size != codebook.pq_m) {
             throw std::runtime_error(
-                "Milestone 5 requires one 8-bit code per subquantizer");
+                "V0 requires 1..8-bit PQ with one byte per subquantizer");
         }
 
         hnswlib::L2Space space(codebook.dimension);

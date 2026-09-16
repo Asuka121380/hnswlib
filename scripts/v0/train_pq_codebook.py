@@ -50,7 +50,7 @@ def _input_contract(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str,
     dimension = int(sample["dimension"])
     count = int(sample["sample_count"])
     _require(dimension % args.M_pq == 0, "sample dimension must be divisible by M-pq")
-    _require(args.nbits == 8, "V0 pilot contract fixes nbits=8")
+    _require(1 <= args.nbits <= 8, "nbits must be between 1 and 8")
     _require(0.0 < args.validation_fraction < 1.0, "validation fraction must be in (0,1)")
     validation_count = max(1, int(count * args.validation_fraction))
     training_count = count - validation_count
@@ -76,6 +76,10 @@ def _input_contract(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str,
         "ksub": 1 << args.nbits,
         "dsub": dimension // args.M_pq,
         "code_size": args.M_pq,
+        "code_storage": "uint8_per_subquantizer",
+        "faiss_packed_code_bytes": (args.M_pq * args.nbits + 7) // 8,
+        "faiss_training_sample_cap": (1 << args.nbits) * args.max_points_per_centroid,
+        "faiss_training_subsampling_expected": training_count > (1 << args.nbits) * args.max_points_per_centroid,
         "training_seed": args.seed,
         "split_seed": args.split_seed,
         "split_algorithm": "numpy_default_rng_permutation_v1",
@@ -240,6 +244,8 @@ def main() -> int:
         _require(args.M_pq > 0, "M-pq must be positive")
         _require(args.iterations > 0 and args.nredo > 0, "training counts must be positive")
         _require(args.threads > 0, "threads must be positive")
+        _require(0 < args.min_points_per_centroid <= args.max_points_per_centroid,
+                 "centroid sample limits must satisfy 0 < min <= max")
         _refuse_existing(args.output_metrics, args.output_codebook, args.output_errors)
         _, contract = _input_contract(args)
         if args.check_input_only:

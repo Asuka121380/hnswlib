@@ -299,6 +299,13 @@ if(HNSWLIB_EXAMPLES)
         add_test(NAME v0_real_pruning_test COMMAND v0_real_pruning_test)
       endif()
 
+      add_executable(v0_packed_codes_test tests/cpp/v0_packed_codes_test.cpp)
+      target_link_libraries(v0_packed_codes_test hnswlib)
+      add_test(NAME v0_packed_codes_test COMMAND v0_packed_codes_test)
+      add_executable(v0_m16_b6_test tests/cpp/v0_m16_b6_test.cpp)
+      target_link_libraries(v0_m16_b6_test hnswlib)
+      add_test(NAME v0_m16_b6_test COMMAND v0_m16_b6_test)
+
       if(HNSWLIB_BUILD_FAISS_PQ_TOOLS)
         find_package(faiss CONFIG QUIET)
         if(TARGET faiss)
@@ -344,6 +351,8 @@ if(HNSWLIB_EXAMPLES)
 
       find_package(PythonInterp 3 QUIET)
       if(PYTHONINTERP_FOUND)
+        add_test(NAME v0_pq_variant_test COMMAND ${PYTHON_EXECUTABLE}
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/python/v0_pq_variant_test.py)
         add_test(
           NAME v0_pq_local_test
           COMMAND ${PYTHON_EXECUTABLE}
