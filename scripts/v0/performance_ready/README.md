@@ -8,6 +8,11 @@ load or access a sidecar. Cluster timing builds must set
 `HNSWLIB_ENABLE_NATIVE_ARCH=OFF`: a binary compiled with `-march=native` can
 raise `SIGILL` when the scheduler moves it to a different CPU model.
 
+The P1 platform/build causal matrix is documented in
+`P1_ENVIRONMENT_MATRIX.md`. Its cell runner supports both portable and
+node-local native builds while preserving the same primary QPS pair,
+single-logical-CPU timing contract, and P0.3 component measurements.
+
 Before collecting timing data, validate the fresh build directory:
 
 ```text

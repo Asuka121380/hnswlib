@@ -25,6 +25,39 @@ def load_module(name: str, path: Path):
 
 
 class PerformanceReadyInfrastructureTest(unittest.TestCase):
+    def test_build_contract_distinguishes_portable_and_native(self) -> None:
+        required = {
+            "CMAKE_BUILD_TYPE": "Release",
+            "HNSWLIB_ENABLE_EDGE_QUANT_V0": "ON",
+            "HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING": "ON",
+            "HNSWLIB_ENABLE_V0_STRICT_FP_CONTRACT": "OFF",
+            "HNSWLIB_PERFORMANCE_COMPARABLE_FLAGS": "ON",
+            "HNSWLIB_ENABLE_BASELINE_TRACE": "OFF",
+            "HNSWLIB_ENABLE_V0_SHADOW_VALIDATION": "OFF",
+            "HNSWLIB_ENABLE_V0_APPROX_SHADOW": "OFF",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            build = Path(directory)
+            cache = build / "CMakeCache.txt"
+            for variant, native in (("off", "OFF"), ("on", "ON")):
+                values = dict(required, HNSWLIB_ENABLE_NATIVE_ARCH=native)
+                cache.write_text("".join(
+                    f"{key}:STRING={value}\n" for key, value in values.items()),
+                    encoding="utf-8")
+                completed = subprocess.run([
+                    sys.executable, str(SCRIPTS / "check_build_contract.py"),
+                    "--build-dir", str(build), "--contract", "performance",
+                    "--native-arch", variant,
+                ])
+                self.assertEqual(completed.returncode, 0)
+                wrong = "on" if variant == "off" else "off"
+                completed = subprocess.run([
+                    sys.executable, str(SCRIPTS / "check_build_contract.py"),
+                    "--build-dir", str(build), "--contract", "performance",
+                    "--native-arch", wrong,
+                ])
+                self.assertEqual(completed.returncode, 1)
+
     def test_component_microbenchmark_summary_uses_block_median(self) -> None:
         module = load_module(
             "run_component_microbenchmark",
@@ -280,6 +313,80 @@ class PerformanceReadyInfrastructureTest(unittest.TestCase):
             ])
             self.assertEqual(completed.returncode, 0)
             self.assertEqual(len(output.read_text().splitlines()), 3)
+
+    def test_environment_matrix_requires_and_summarizes_four_cells(self) -> None:
+        script = SCRIPTS / "summarize_environment_matrix.py"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cells = []
+            for platform_index, platform in enumerate(("testing", "weirdo")):
+                for variant_index, variant in enumerate(("portable", "native")):
+                    cell = root / f"{platform}-{variant}"
+                    (cell / "qps").mkdir(parents=True)
+                    (cell / "component").mkdir()
+                    (cell / "COMPLETE").write_text("abc\n", encoding="utf-8")
+                    (cell / "cell.env").write_text(
+                        f"platform={platform}\nbuild_variant={variant}\n"
+                        "git_commit=abc\n",
+                        encoding="utf-8",
+                    )
+                    fields = [
+                        "configuration_id", "experiment_commit",
+                        "resource_profile", "qps_mean", "qps_speedup_mean",
+                        "qps_speedup_ci_low", "qps_speedup_ci_high",
+                        "checksum_consistent",
+                    ]
+                    speedup = 1.10 + platform_index * .02 + variant_index * .01
+                    with (cell / "qps" / "qps_summary.csv").open(
+                            "w", encoding="utf-8", newline="") as handle:
+                        writer = csv.DictWriter(handle, fieldnames=fields)
+                        writer.writeheader()
+                        writer.writerows([
+                            {"configuration_id": "baseline-ef435",
+                             "experiment_commit": "abc",
+                             "resource_profile": "exploratory-shared",
+                             "qps_mean": 100, "qps_speedup_mean": 1,
+                             "qps_speedup_ci_low": 1,
+                             "qps_speedup_ci_high": 1,
+                             "checksum_consistent": "True"},
+                            {"configuration_id":
+                             "approx-no-retry-beta1p45-legacy-ef500",
+                             "experiment_commit": "abc",
+                             "resource_profile": "exploratory-shared",
+                             "qps_mean": 100 * speedup,
+                             "qps_speedup_mean": speedup,
+                             "qps_speedup_ci_low": speedup - .005,
+                             "qps_speedup_ci_high": speedup + .005,
+                             "checksum_consistent": "True"},
+                        ])
+                    (cell / "component" / "component_summary.json").write_text(
+                        json.dumps({"exact_l2_ns": 200,
+                                    "fast_estimator_ns": 30,
+                                    "fast_lut_build_ns": 100000}),
+                        encoding="utf-8")
+                    (cell / "component" / "manifest.json").write_text(
+                        json.dumps({"contract": {
+                            "experiment_commit": "abc",
+                            "resource_profile": "exploratory-shared",
+                        }}),
+                        encoding="utf-8",
+                    )
+                    cells.extend(["--cell", f"{platform}={variant}={cell}"])
+            output = root / "matrix.csv"
+            report = root / "matrix.json"
+            completed = subprocess.run([
+                sys.executable, str(script), *cells,
+                "--output", str(output), "--report", str(report),
+            ])
+            self.assertEqual(completed.returncode, 0)
+            data = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(data["status"], "complete")
+            self.assertAlmostEqual(
+                data["build_effect_native_minus_portable_percentage_points"]
+                    ["testing"],
+                1.0,
+            )
+            self.assertEqual(len(output.read_text(encoding="utf-8").splitlines()), 5)
 
 
 if __name__ == "__main__":

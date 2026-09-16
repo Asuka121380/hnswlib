@@ -23,6 +23,11 @@ def main() -> int:
     parser.add_argument("--build-dir", required=True, type=Path)
     parser.add_argument("--contract", required=True,
                         choices=("reference", "performance"))
+    parser.add_argument(
+        "--native-arch", choices=("off", "on"), default="off",
+        help=("Expected HNSWLIB_ENABLE_NATIVE_ARCH value. Performance "
+              "builds default to portable/off for backward compatibility."),
+    )
     args = parser.parse_args()
     cache_path = args.build_dir / "CMakeCache.txt"
     if not cache_path.is_file():
@@ -35,6 +40,8 @@ def main() -> int:
         "HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING": "ON",
     }
     if args.contract == "reference":
+        if args.native_arch != "off":
+            parser.error("reference builds must use --native-arch off")
         required.update({
             "HNSWLIB_ENABLE_V0_STRICT_FP_CONTRACT": "ON",
             "HNSWLIB_ENABLE_NATIVE_ARCH": "OFF",
@@ -43,7 +50,7 @@ def main() -> int:
         required.update({
             "HNSWLIB_ENABLE_V0_STRICT_FP_CONTRACT": "OFF",
             "HNSWLIB_PERFORMANCE_COMPARABLE_FLAGS": "ON",
-            "HNSWLIB_ENABLE_NATIVE_ARCH": "OFF",
+            "HNSWLIB_ENABLE_NATIVE_ARCH": args.native_arch.upper(),
             "HNSWLIB_ENABLE_BASELINE_TRACE": "OFF",
             "HNSWLIB_ENABLE_V0_SHADOW_VALIDATION": "OFF",
             "HNSWLIB_ENABLE_V0_APPROX_SHADOW": "OFF",
