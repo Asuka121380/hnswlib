@@ -111,6 +111,31 @@ bash scripts/v0/performance_ready/submit_qps_experiment.sh \
   --dry-run
 ```
 
+Example P0.5 PMU dry run matching the same testing node, portable build,
+single logical CPU, and shared exploratory resource profile used by P0.1-P0.4:
+
+```text
+PERFORMANCE_BUILD="$PWD/build-v0-performance-portable-$(git rev-parse --short=7 HEAD)" \
+bash scripts/v0/performance_ready/submit_qps_experiment.sh \
+  --config configs/v0/qps/p0_attribution_pmu.json \
+  --resource-profile exploratory-shared \
+  --partition testing --qos normal --nodelist gpusrv-2 \
+  --time-limit 01:00:00 --memory 24G \
+  --run-root "$HOME/IndividualProject/results/v0_performance_ready/p0-attribution-pmu-testing-portable-$(git rev-parse --short=7 HEAD)" \
+  --dry-run
+```
+
+Remove `--dry-run` only after the preview reports the intended commit, build,
+node, and `performance build contract OK`. The completed `qps_summary.csv`
+contains per-query medians for all seven requested events, IPC, branch/cache
+miss rates, and PMU diagnostics. `pmu_status=partial` means one or more events
+were unavailable in at least one block; `pmu_status=multiplexed` means every
+event was available but at least one `running_ratio` was below 0.90. In either
+case, inspect `pmu_unavailable_events` and `pmu_min_running_ratio` before making
+a claim; `pmu_error_numbers` preserves the kernel errno values needed to
+distinguish permission failures from unsupported events. A PMU result remains
+exploratory even if all events are available.
+
 After the run completes, compare gate directly with legacy as well as both
 active cases with the matched baseline. Supplying the ground truth also checks
 that the performance-run results preserve Recall@10:

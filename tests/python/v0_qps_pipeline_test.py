@@ -98,6 +98,23 @@ class QpsConfigTest(unittest.TestCase):
         self.assertEqual({case["baseline_id"] for case in active},
                          {"baseline-ef435"})
 
+    def test_p0_pmu_is_a_fifteen_process_portable_diagnostic(self) -> None:
+        _, resolved = self.module.load_config(
+            ROOT / "configs" / "v0" / "qps" / "p0_attribution_pmu.json",
+            "exploratory-shared",
+        )
+        self.assertEqual(resolved["experiment_role"], "exploratory")
+        self.assertEqual(resolved["claim_scope"], "exploratory")
+        self.assertTrue(resolved["hardware_counters"])
+        self.assertTrue(resolved["require_single_cpu_affinity"])
+        self.assertEqual(resolved["configuration_count"], 3)
+        self.assertEqual(resolved["expected_result_count"], 15)
+        self.assertEqual(
+            {case["id"] for case in resolved["cases"]},
+            {"baseline-ef435", "baseline-ef500",
+             "approx-no-retry-beta1p45-legacy-ef500"},
+        )
+
     def test_exploratory_scan_resolves_to_63_results(self) -> None:
         _, resolved = self.module.load_config(
             ROOT / "configs" / "v0" / "qps" / "beta_130_140_scan.json",
@@ -328,6 +345,82 @@ class QpsMatrixIntegrationTest(unittest.TestCase):
                     mock.patch.object(runner_module.subprocess, "run") as rerun:
                 self.assertEqual(runner_module.main(), 0)
                 rerun.assert_not_called()
+
+    def test_pmu_summary_keeps_all_events_and_multiplex_diagnostics(self) -> None:
+        runner_module = load_module(
+            "run_qps_matrix_pmu_tested", SCRIPTS / "run_qps_matrix.py")
+        summary_module = load_module(
+            "summarize_qps_experiment_pmu_tested",
+            SCRIPTS / "summarize_qps_experiment.py")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("runner", "index.bin", "sidecar.bin",
+                         "query.fvecs", "CMakeCache.txt"):
+                (root / name).write_text(name, encoding="utf-8")
+            requested = exploratory_config()
+            requested["hardware_counters"] = True
+            config = root / "config.json"
+            config.write_text(json.dumps(requested), encoding="utf-8")
+            run_root = root / "run"
+
+            def fake_pmu_runner(
+                    command: list[str], check: bool,
+            ) -> subprocess.CompletedProcess:
+                result = self._fake_runner(command, check)
+                output = Path(command[command.index("--output") + 1])
+                data = json.loads(output.read_text(encoding="utf-8"))
+                data["measured_queries"] = 20
+                data["hardware_counters_requested"] = True
+                data["hardware_counters"] = {
+                    "cycles": {"available": True, "value": 2000,
+                               "running_ratio": .95, "error_number": 0},
+                    "instructions": {"available": True, "value": 3000,
+                                     "running_ratio": .94,
+                                     "error_number": 0},
+                    "branches": {"available": True, "value": 400,
+                                 "running_ratio": .93, "error_number": 0},
+                    "branch_misses": {"available": True, "value": 20,
+                                      "running_ratio": .92,
+                                      "error_number": 0},
+                    "cache_references": {"available": True, "value": 200,
+                                         "running_ratio": .91,
+                                         "error_number": 0},
+                    "cache_misses": {"available": True, "value": 40,
+                                     "running_ratio": .89,
+                                     "error_number": 0},
+                    "l1d_read_misses": {"available": True, "value": 60,
+                                        "running_ratio": .90,
+                                        "error_number": 0},
+                }
+                output.write_text(json.dumps(data), encoding="utf-8")
+                return result
+
+            with mock.patch.object(
+                    sys, "argv", self._arguments(root, config, run_root)), \
+                    mock.patch.object(
+                        runner_module.platform, "platform", return_value="test"), \
+                    mock.patch.object(
+                        runner_module.subprocess, "run",
+                        side_effect=fake_pmu_runner):
+                self.assertEqual(runner_module.main(), 0)
+            with mock.patch.object(sys, "argv", [
+                    "summarize_qps_experiment.py", "--run-root", str(run_root)]):
+                self.assertEqual(summary_module.main(), 0)
+            with (run_root / "qps_summary.csv").open(
+                    encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertTrue(all(row["pmu_status"] == "multiplexed"
+                                for row in rows))
+            self.assertTrue(all(float(row["ipc_median"]) == 1.5
+                                for row in rows))
+            self.assertTrue(all(float(row["branch_miss_rate_median"]) == .05
+                                for row in rows))
+            self.assertTrue(all(float(row["cache_miss_rate_median"]) == .2
+                                for row in rows))
+            report = json.loads((run_root / "qps_summary.json").read_text(
+                encoding="utf-8"))
+            self.assertTrue(report["hardware_counters_requested"])
+            self.assertEqual(report["pmu_running_ratio_warning_threshold"], .9)
 
     def test_resume_rejects_result_checksum_mismatch(self) -> None:
         runner_module = load_module(

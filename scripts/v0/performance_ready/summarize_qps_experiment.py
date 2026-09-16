@@ -31,8 +31,17 @@ FIELDS = (
     "latency_p50_ns_median", "latency_p95_ns_median",
     "latency_p99_ns_median", "process_replicates", "checksum_consistent",
     "cycles_per_query_median", "instructions_per_query_median",
-    "l1d_read_misses_per_query_median", "ipc_median",
+    "branches_per_query_median", "branch_misses_per_query_median",
+    "branch_miss_rate_median", "cache_references_per_query_median",
+    "cache_misses_per_query_median", "cache_miss_rate_median",
+    "l1d_read_misses_per_query_median", "ipc_median", "pmu_status",
+    "pmu_min_running_ratio", "pmu_unavailable_events", "pmu_error_numbers",
 )
+COUNTER_NAMES = (
+    "cycles", "instructions", "branches", "branch_misses",
+    "cache_references", "cache_misses", "l1d_read_misses",
+)
+PMU_RUNNING_RATIO_WARNING = 0.90
 
 
 def sha256(path: Path) -> str:
@@ -144,42 +153,74 @@ def main() -> int:
             raise SystemExit(f"result checksum is missing: {config_id}")
         checksums = {
             str(data["result_checksum"]) for _, data in observations}
-        counter_enabled = all(
-            bool(data.get("hardware_counters", {}).get(
-                "cycles", {}).get("available", False)) and
-            float(data.get("hardware_counters", {}).get(
-                "cycles", {}).get("value", 0)) > 0 and
-            bool(data.get("hardware_counters", {}).get(
-                "instructions", {}).get("available", False))
-            for _, data in observations)
-        if counter_enabled:
-            cycles_per_query = [
-                float(data["hardware_counters"]["cycles"]["value"]) /
-                float(data["measured_queries"])
+        pmu_requested = bool(resolved.get("hardware_counters", False))
+        counter_values: dict[str, list[float]] = {}
+        running_ratios: list[float] = []
+        unavailable_events: list[str] = []
+        pmu_error_numbers: dict[str, list[int]] = {}
+        for event in COUNTER_NAMES:
+            entries = [
+                data.get("hardware_counters", {}).get(event, {})
                 for _, data in observations
             ]
-            instructions_per_query = [
-                float(data["hardware_counters"]["instructions"]["value"]) /
-                float(data["measured_queries"])
-                for _, data in observations
-            ]
-            l1d_available = all(
-                bool(data["hardware_counters"]["l1d_read_misses"]["available"])
-                for _, data in observations)
-            l1d_per_query = ([
-                float(data["hardware_counters"]["l1d_read_misses"]["value"]) /
-                float(data["measured_queries"])
-                for _, data in observations
-            ] if l1d_available else [])
-            ipc = [
-                float(data["hardware_counters"]["instructions"]["value"]) /
-                float(data["hardware_counters"]["cycles"]["value"])
-                for _, data in observations
-            ]
+            if all(bool(entry.get("available", False)) for entry in entries):
+                counter_values[event] = [
+                    float(entry["value"]) / float(data["measured_queries"])
+                    for entry, (_, data) in zip(entries, observations)
+                ]
+                running_ratios.extend(
+                    float(entry.get("running_ratio", 0.0))
+                    for entry in entries
+                )
+            else:
+                counter_values[event] = []
+                if pmu_requested:
+                    unavailable_events.append(event)
+                    pmu_error_numbers[event] = sorted({
+                        int(entry.get("error_number", 0))
+                        for entry in entries
+                        if not bool(entry.get("available", False))
+                    })
+
+        cycles_per_query = counter_values["cycles"]
+        instructions_per_query = counter_values["instructions"]
+        branches_per_query = counter_values["branches"]
+        branch_misses_per_query = counter_values["branch_misses"]
+        cache_references_per_query = counter_values["cache_references"]
+        cache_misses_per_query = counter_values["cache_misses"]
+        l1d_per_query = counter_values["l1d_read_misses"]
+        ipc = ([
+            instructions / cycles
+            for instructions, cycles in zip(
+                instructions_per_query, cycles_per_query)
+            if cycles > 0.0
+        ] if instructions_per_query and cycles_per_query else [])
+        branch_miss_rate = ([
+            misses / branches
+            for misses, branches in zip(
+                branch_misses_per_query, branches_per_query)
+            if branches > 0.0
+        ] if branch_misses_per_query and branches_per_query else [])
+        cache_miss_rate = ([
+            misses / references
+            for misses, references in zip(
+                cache_misses_per_query, cache_references_per_query)
+            if references > 0.0
+        ] if cache_misses_per_query and cache_references_per_query else [])
+        pmu_min_running_ratio: float | str = (
+            min(running_ratios) if running_ratios else "")
+        if not pmu_requested:
+            pmu_status = "not-requested"
+        elif not cycles_per_query or not instructions_per_query:
+            pmu_status = "unavailable"
+        elif unavailable_events:
+            pmu_status = "partial"
+        elif float(pmu_min_running_ratio) < PMU_RUNNING_RATIO_WARNING:
+            pmu_status = "multiplexed"
         else:
-            cycles_per_query = instructions_per_query = []
-            l1d_per_query = ipc = []
-        rows.append({
+            pmu_status = "complete"
+
+        row = {
             "experiment_name": resolved["experiment_name"],
             "experiment_role": resolved["experiment_role"],
             "resource_profile": resolved["resource_profile"],
@@ -216,10 +257,35 @@ def main() -> int:
             "instructions_per_query_median": (
                 statistics.median(instructions_per_query)
                 if instructions_per_query else ""),
+            "branches_per_query_median": (
+                statistics.median(branches_per_query)
+                if branches_per_query else ""),
+            "branch_misses_per_query_median": (
+                statistics.median(branch_misses_per_query)
+                if branch_misses_per_query else ""),
+            "branch_miss_rate_median": (
+                statistics.median(branch_miss_rate)
+                if branch_miss_rate else ""),
+            "cache_references_per_query_median": (
+                statistics.median(cache_references_per_query)
+                if cache_references_per_query else ""),
+            "cache_misses_per_query_median": (
+                statistics.median(cache_misses_per_query)
+                if cache_misses_per_query else ""),
+            "cache_miss_rate_median": (
+                statistics.median(cache_miss_rate)
+                if cache_miss_rate else ""),
             "l1d_read_misses_per_query_median": (
                 statistics.median(l1d_per_query) if l1d_per_query else ""),
             "ipc_median": statistics.median(ipc) if ipc else "",
-        })
+            "pmu_status": pmu_status,
+            "pmu_min_running_ratio": pmu_min_running_ratio,
+            "pmu_unavailable_events": ";".join(unavailable_events),
+            "pmu_error_numbers": ";".join(
+                f"{event}:{','.join(str(value) for value in values)}"
+                for event, values in pmu_error_numbers.items()),
+        }
+        rows.append(row)
 
     rows.sort(key=lambda row: (
         -1.0 if row["beta"] == "" else float(row["beta"]),
@@ -242,6 +308,20 @@ def main() -> int:
         "configuration_count": len(rows),
         "process_result_count": len(completed),
         "blocks": blocks,
+        "hardware_counters_requested": bool(
+            resolved.get("hardware_counters", False)),
+        "pmu_running_ratio_warning_threshold": PMU_RUNNING_RATIO_WARNING,
+        "pmu_diagnostics": {
+            str(row["configuration_id"]): {
+                "status": row["pmu_status"],
+                "min_running_ratio": row["pmu_min_running_ratio"],
+                "unavailable_events": (
+                    str(row["pmu_unavailable_events"]).split(";")
+                    if row["pmu_unavailable_events"] else []),
+                "error_numbers": row["pmu_error_numbers"],
+            }
+            for row in rows
+        },
         "manifest": str(manifest_path.resolve()),
         "summary_csv": str(output.resolve()),
     }

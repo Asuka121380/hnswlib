@@ -197,6 +197,8 @@ for required in \
     exit 2
   fi
 done
+"$analysis_python" "$script_dir/check_build_contract.py" \
+  --build-dir "$performance_build" --contract performance
 
 sbatch_args=(
   --parsable
