@@ -26,6 +26,7 @@
 #endif
 
 #include "hnswlib/hnswlib.h"
+#include "hnswlib/edge_quant_v0_residual_io.h"
 
 namespace {
 
@@ -54,6 +55,7 @@ struct Options {
     std::string dataset_config;
     std::string index_path;
     std::string sidecar_path;
+    std::string companion_path;
     std::string output_dir;
     std::string mode;
     std::string run_id;
@@ -68,6 +70,7 @@ struct Options {
     size_t shadow_sample_remainder = 0;
     std::vector<double> retry_betas;
     double approx_beta = 0.0;
+    double residual_theta = 1.0;
 };
 
 struct Totals {
@@ -118,6 +121,9 @@ struct Totals {
     uint64_t approx_retry_inserted_result = 0;
     uint64_t approx_estimator_fallback = 0;
     uint64_t approx_state_bytes_max = 0;
+    uint64_t residual_evaluated = 0;
+    uint64_t residual_pruned = 0;
+    uint64_t residual_fallback = 0;
     uint64_t fast_reference_valid_pairs = 0;
     uint64_t fast_reference_status_disagreement = 0;
     uint64_t fast_reference_decision_disagreement = 0;
@@ -135,6 +141,10 @@ struct Totals {
 bool isApproxActiveMode(const std::string& mode) {
     return mode == "approx-no-retry" ||
         mode == "approx-retry";
+}
+
+bool isResidualMode(const std::string& mode) {
+    return mode == "residual-direct" || mode == "residual-threshold";
 }
 
 uint64_t mix64(uint64_t value) {
@@ -349,7 +359,8 @@ void printUsage(std::ostream& out) {
         << "  --index-path <hnsw-index>\n"
         << "  --sidecar-path <v0meta>\n"
         << "  --output-dir <directory>\n"
-        << "  --mode <correctness|shadow|retry-shadow|prune|approx-no-retry|approx-retry>\n"
+        << "  --mode <correctness|shadow|retry-shadow|prune|approx-no-retry|approx-retry|residual-direct|residual-threshold>\n"
+        << "  [--companion-path <v0res>] [--residual-theta <positive-scale>]\n"
         << "  [--run-id <text>]\n"
         << "  [--query-start <non-negative-integer>]\n"
         << "  [--query-count <non-negative-integer; 0 means remaining>]\n"
@@ -379,6 +390,7 @@ Options parseOptions(int argc, char** argv) {
         if (key == "--dataset-config") options.dataset_config = value;
         else if (key == "--index-path") options.index_path = value;
         else if (key == "--sidecar-path") options.sidecar_path = value;
+        else if (key == "--companion-path") options.companion_path = value;
         else if (key == "--output-dir") options.output_dir = value;
         else if (key == "--mode") options.mode = value;
         else if (key == "--run-id") options.run_id = value;
@@ -398,6 +410,8 @@ Options parseOptions(int argc, char** argv) {
             options.retry_betas = parseBetas(value, key);
         } else if (key == "--approx-beta") {
             options.approx_beta = parseBeta(value, key);
+        } else if (key == "--residual-theta") {
+            options.residual_theta = std::stod(value);
         } else if (key == "--producer-git-commit") {
             options.producer_git_commit = value;
         } else if (key == "--git-branch") {
@@ -420,7 +434,7 @@ Options parseOptions(int argc, char** argv) {
         options.mode != "retry-shadow" &&
         options.mode != "prune" &&
         options.mode != "approx-no-retry" &&
-        options.mode != "approx-retry") {
+        options.mode != "approx-retry" && !isResidualMode(options.mode)) {
         throw std::runtime_error(
             "--mode must be correctness, shadow, retry-shadow, prune, approx-no-retry, or approx-retry");
     }
@@ -430,6 +444,16 @@ Options parseOptions(int argc, char** argv) {
             "shadow mode requires HNSWLIB_ENABLE_V0_SHADOW_VALIDATION=ON");
     }
 #endif
+#ifndef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+    if (isResidualMode(options.mode))
+        throw std::runtime_error("residual mode requires HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING=ON");
+#endif
+    if (isResidualMode(options.mode) &&
+        (options.companion_path.empty() ||
+         !std::isfinite(options.residual_theta) ||
+         options.residual_theta <= 0.0 ||
+         (options.mode == "residual-direct" && options.residual_theta != 1.0)))
+        throw std::runtime_error("residual mode requires companion and valid theta");
 #ifndef HNSWLIB_ENABLE_V0_APPROX_SHADOW
     if (options.mode == "retry-shadow") {
         throw std::runtime_error(
@@ -984,6 +1008,9 @@ void addMetrics(
     totals.approx_state_bytes_max = std::max(
         totals.approx_state_bytes_max,
         metrics.approx_state_bytes);
+    totals.residual_evaluated += metrics.residual_evaluated;
+    totals.residual_pruned += metrics.residual_pruned;
+    totals.residual_fallback += metrics.residual_fallback;
     totals.fast_reference_valid_pairs +=
         metrics.fast_reference_valid_pairs;
     totals.fast_reference_status_disagreement +=
@@ -1026,6 +1053,8 @@ void writeMetadata(
                 "[\"current\",\"hypothetical_retry_shadow\"],\n" :
             isApproxActiveMode(options.mode) ?
                 "[\"baseline\",\"active_raw_margin\"],\n" :
+            isResidualMode(options.mode) ?
+                "[\"baseline\",\"active_residual\"],\n" :
                 "[\"current\"],\n")
         << "  \"validation_tolerance\": 0.0,\n"
         << "  \"retry_shadow_schema_version\": "
@@ -1038,6 +1067,13 @@ void writeMetadata(
         << "  \"index_path\": \"" << jsonEscape(options.index_path)
         << "\",\n"
         << "  \"sidecar_path\": \"" << jsonEscape(options.sidecar_path)
+        << "\",\n"
+        << "  \"companion_path\": \"" << jsonEscape(options.companion_path)
+        << "\",\n"
+        << "  \"companion_sha256\": \""
+        << (isResidualMode(options.mode) ?
+            hnswlib::edgeQuantV0Sha256Hex(
+                hnswlib::v0ResidualFileSha(options.companion_path)) : "")
         << "\",\n"
         << "  \"dimension\": " << dataset.dimension << ",\n"
         << "  \"n_base\": " << dataset.n_base << ",\n"
@@ -1063,7 +1099,8 @@ void writeMetadata(
         << ",\n"
         << "  \"real_pruning_enabled\": "
         << ((options.mode == "prune" ||
-             isApproxActiveMode(options.mode)) ?
+             isApproxActiveMode(options.mode) ||
+             isResidualMode(options.mode)) ?
                 "true" : "false")
         << ",\n"
         << "  \"bound_pruned_semantics\": "
@@ -1071,16 +1108,22 @@ void writeMetadata(
                 "\"actual_prune\",\n" :
             isApproxActiveMode(options.mode) ?
                 "\"strict_bound_observe_only; see approx_first_pruned\",\n" :
+            isResidualMode(options.mode) ?
+                "\"residual_pruned contains actual active prunes\",\n" :
                 "\"would_prune_observe_only\",\n")
         << "  \"approx_active\": "
         << (isApproxActiveMode(options.mode) ? "true" : "false")
         << ",\n"
         << "  \"approx_beta\": "
         << std::setprecision(17) << options.approx_beta << ",\n"
+        << "  \"residual_theta\": " << options.residual_theta << ",\n"
+        << "  \"false_prune_available\": "
+        << (isResidualMode(options.mode) ? "false" : "true") << ",\n"
         << "  \"approx_retry_enabled\": "
         << (options.mode == "approx-retry" ? "true" : "false")
         << ",\n"
-        << "  \"raw_fast_path\": false,\n"
+        << "  \"raw_fast_path\": "
+        << (isResidualMode(options.mode) ? "true" : "false") << ",\n"
         << "  \"shadow_sample_modulus\": "
         << options.shadow_sample_modulus << ",\n"
         << "  \"shadow_sample_remainder\": "
@@ -1120,6 +1163,7 @@ bool writeSummary(
     const Options& options,
     const Totals& totals) {
     const bool approx_active = isApproxActiveMode(options.mode);
+    const bool residual_active = isResidualMode(options.mode);
     const bool approx_invariants =
         !approx_active ||
         (totals.approx_eligible_first_visits > 0U &&
@@ -1137,12 +1181,12 @@ bool writeSummary(
          (options.mode != "approx-no-retry" ||
           totals.approx_retry_exact_distance == 0U));
     const bool valid =
-        (approx_active || totals.mismatch_queries == 0) &&
+        (approx_active || residual_active || totals.mismatch_queries == 0) &&
         totals.lower_bound_violation == 0 &&
         totals.false_prune == 0 &&
         totals.raw_prunable <= totals.bound_evaluated &&
         totals.oracle_prunable <= totals.bound_evaluated &&
-        (options.mode == "prune" || approx_active ||
+        (options.mode == "prune" || approx_active || residual_active ||
             totals.exact_distance_saved == 0) &&
         (options.mode != "prune" ||
             totals.bound_pruned ==
@@ -1208,7 +1252,14 @@ bool writeSummary(
         << totals.exact_distance_saved << ",\n"
         << "  \"lower_bound_violation\": "
         << totals.lower_bound_violation << ",\n"
-        << "  \"false_prune\": " << totals.false_prune << ",\n"
+        << "  \"false_prune\": "
+        << (residual_active ? "null" : std::to_string(totals.false_prune))
+        << ",\n"
+        << "  \"false_prune_available\": "
+        << (residual_active ? "false" : "true") << ",\n"
+        << "  \"residual_evaluated\": " << totals.residual_evaluated << ",\n"
+        << "  \"residual_pruned\": " << totals.residual_pruned << ",\n"
+        << "  \"residual_fallback\": " << totals.residual_fallback << ",\n"
         << "  \"exact_distance_computed\": "
         << totals.exact_distance_computed << ",\n"
         << "  \"baseline_exact_distance_computed\": "
@@ -1356,6 +1407,18 @@ void run(const Options& options) {
         throw std::runtime_error(
             "Dataset manifest does not match the validated sidecar");
     }
+    std::unique_ptr<hnswlib::V0ResidualCompanion> residual_companion;
+#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+    if (isResidualMode(options.mode)) {
+        hnswlib::V0ResidualIdentity identity;
+        identity.index_sha = index.getV0SerializedIndexFingerprint();
+        identity.sidecar_sha = hnswlib::v0ResidualFileSha(options.sidecar_path);
+        identity.adjacency_sha = index.getV0Layer0AdjacencyFingerprint();
+        residual_companion.reset(new hnswlib::V0ResidualCompanion(
+            options.companion_path, identity, header.dimension,
+            header.directed_edge_count));
+    }
+#endif
 
     Totals totals;
     std::ofstream query_out(
@@ -1387,7 +1450,8 @@ void run(const Options& options) {
         << "approx_retry_encountered,approx_retry_exact_distance,"
         << "approx_retry_inserted_candidate,"
         << "approx_retry_inserted_result,"
-        << "approx_estimator_fallback,approx_state_bytes\n";
+        << "approx_estimator_fallback,approx_state_bytes,"
+        << "residual_evaluated,residual_pruned,residual_fallback\n";
 
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
     std::unique_ptr<CsvShadowCollector> shadow_collector;
@@ -1444,6 +1508,7 @@ void run(const Options& options) {
 
         hnswlib::V0QueryMetrics baseline_metrics;
         if (isApproxActiveMode(options.mode) ||
+            isResidualMode(options.mode) ||
             options.mode == "prune") {
             const std::priority_queue<
                 std::pair<float, hnswlib::labeltype> >
@@ -1481,6 +1546,15 @@ void run(const Options& options) {
                 config,
                 &metrics,
                 nullptr);
+        } else
+#endif
+#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+        if (isResidualMode(options.mode)) {
+            hnswlib::V0ResidualPruningConfig config;
+            config.theta = options.residual_theta;
+            config.threshold_mode = options.mode == "residual-threshold";
+            v0 = index.searchKnnV0Residual(
+                query, options.k, config, *residual_companion, &metrics);
         } else
 #endif
 #ifdef HNSWLIB_ENABLE_V0_REAL_PRUNING
@@ -1585,7 +1659,8 @@ void run(const Options& options) {
             << metrics.exact_only_fallback << ','
             << metrics.exact_distance_saved << ','
             << metrics.lower_bound_violation << ','
-            << metrics.false_prune << ','
+            << (isResidualMode(options.mode) ? "" :
+                std::to_string(metrics.false_prune)) << ','
             << metrics.exact_distance_computed << ','
             << metrics.expanded_nodes << ','
             << metrics.edge_scans << ','
@@ -1617,7 +1692,10 @@ void run(const Options& options) {
             << metrics.approx_retry_inserted_candidate << ','
             << metrics.approx_retry_inserted_result << ','
             << metrics.approx_estimator_fallback << ','
-            << metrics.approx_state_bytes << '\n';
+            << metrics.approx_state_bytes << ','
+            << metrics.residual_evaluated << ','
+            << metrics.residual_pruned << ','
+            << metrics.residual_fallback << '\n';
         if (!query_out) {
             throw std::runtime_error(
                 "Cannot write query_metrics.csv");

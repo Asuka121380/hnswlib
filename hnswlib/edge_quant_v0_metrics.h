@@ -52,6 +52,9 @@ struct V0QueryMetrics {
     uint64_t approx_retry_inserted_result = 0;
     uint64_t approx_estimator_fallback = 0;
     uint64_t approx_state_bytes = 0;
+    uint64_t residual_evaluated = 0;
+    uint64_t residual_pruned = 0;
+    uint64_t residual_fallback = 0;
     uint64_t fast_reference_valid_pairs = 0;
     uint64_t fast_reference_status_disagreement = 0;
     uint64_t fast_reference_decision_disagreement = 0;

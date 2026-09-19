@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <queue>
 #include <stdexcept>
 #include <string>
@@ -19,6 +20,7 @@
 #endif
 
 #include "hnswlib/hnswlib.h"
+#include "hnswlib/edge_quant_v0_residual_io.h"
 #include "../../scripts/v0/performance_ready/p0_counters.h"
 
 namespace {
@@ -26,6 +28,7 @@ namespace {
 struct Options {
     std::string index_path;
     std::string sidecar_path;
+    std::string companion_path;
     std::string query_path;
     std::string output_path;
     std::string latency_records_path;
@@ -40,6 +43,7 @@ struct Options {
     size_t warmup_queries = 100U;
     size_t repeats = 5U;
     double beta = 0.0;
+    double theta = 1.0;
     int cpu = -1;
     bool hardware_counters = false;
 };
@@ -69,6 +73,8 @@ Options parseOptions(int argc, char** argv) {
             options.index_path = requireValue(i, argc, argv);
         else if (key == "--sidecar-path")
             options.sidecar_path = requireValue(i, argc, argv);
+        else if (key == "--companion-path")
+            options.companion_path = requireValue(i, argc, argv);
         else if (key == "--query-path")
             options.query_path = requireValue(i, argc, argv);
         else if (key == "--output")
@@ -103,16 +109,19 @@ Options parseOptions(int argc, char** argv) {
                 requireValue(i, argc, argv), "repeats");
         else if (key == "--beta")
             options.beta = std::stod(requireValue(i, argc, argv));
+        else if (key == "--theta")
+            options.theta = std::stod(requireValue(i, argc, argv));
         else if (key == "--cpu")
             options.cpu = std::stoi(requireValue(i, argc, argv));
         else if (key == "--hardware-counters")
             options.hardware_counters = true;
         else if (key == "--help") {
             std::cout
-                << "v0_performance_runner --method baseline|approx-no-retry|approx-retry "
+                << "v0_performance_runner --method baseline|approx-no-retry|approx-retry|residual-direct|residual-threshold "
                 << "--index-path FILE --query-path FILE --dimension N "
                 << "--query-count N --output FILE [--sidecar-path FILE] "
-                << "[--beta X] [--prefetch legacy|gate] [--query-start N] "
+                << "[--beta X] [--theta X] [--companion-path FILE] "
+                << "[--prefetch legacy|gate] [--query-start N] "
                 << "[--k N] [--ef-search N] [--warmup-queries N] "
                 << "[--repeats N] [--cpu N] "
                 << "[--latency-records-output FILE] "
@@ -125,11 +134,13 @@ Options parseOptions(int argc, char** argv) {
 
     const bool approximate = options.method == "approx-no-retry" ||
         options.method == "approx-retry";
+    const bool residual = options.method == "residual-direct" ||
+        options.method == "residual-threshold";
     if (options.index_path.empty() || options.query_path.empty() ||
         options.output_path.empty() || options.dimension == 0U ||
         options.query_count == 0U || options.k == 0U ||
         options.ef_search == 0U || options.repeats < 5U ||
-        (options.method != "baseline" && !approximate)) {
+        (options.method != "baseline" && !approximate && !residual)) {
         throw std::invalid_argument("incomplete performance-runner contract");
     }
     if (approximate &&
@@ -137,6 +148,12 @@ Options parseOptions(int argc, char** argv) {
          !std::isfinite(options.beta) || options.beta < 1.0)) {
         throw std::invalid_argument(
             "approximate method requires sidecar and beta >= 1");
+    }
+    if (residual && (options.sidecar_path.empty() ||
+                     options.companion_path.empty() ||
+                     !std::isfinite(options.theta) || options.theta <= 0.0 ||
+                     (options.method == "residual-direct" && options.theta != 1.0))) {
+        throw std::invalid_argument("residual method requires sidecar, companion and valid theta");
     }
     if (options.prefetch != "legacy" && options.prefetch != "gate") {
         throw std::invalid_argument("prefetch must be legacy or gate");
@@ -241,10 +258,15 @@ int main(int argc, char** argv) {
             std::chrono::steady_clock::now();
         index.setEf(options.ef_search);
 
-        const bool approximate = options.method != "baseline";
+        const bool approximate = options.method == "approx-no-retry" ||
+            options.method == "approx-retry";
+        const bool residual = options.method == "residual-direct" ||
+            options.method == "residual-threshold";
         hnswlib::V0ApproxPruningConfig config;
+        hnswlib::V0ResidualPruningConfig residual_config;
+        std::unique_ptr<hnswlib::V0ResidualCompanion> companion;
         uint64_t sidecar_load_ns = 0U;
-        if (approximate) {
+        if (approximate || residual) {
 #ifndef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
             throw std::runtime_error(
                 "binary lacks V0 approximate performance support");
@@ -257,17 +279,41 @@ int main(int argc, char** argv) {
             sidecar_load_ns = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     sidecar_load_end - sidecar_load_start).count());
-            config.beta = options.beta;
-            config.retry_enabled = options.method == "approx-retry";
-            config.prefetch_policy = options.prefetch == "gate" ?
-                hnswlib::V0ApproxPrefetchPolicy::GateAware :
-                hnswlib::V0ApproxPrefetchPolicy::LegacyVector;
+            if (approximate) {
+                config.beta = options.beta;
+                config.retry_enabled = options.method == "approx-retry";
+                config.prefetch_policy = options.prefetch == "gate" ?
+                    hnswlib::V0ApproxPrefetchPolicy::GateAware :
+                    hnswlib::V0ApproxPrefetchPolicy::LegacyVector;
+            }
+            if (residual) {
+#ifndef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+                throw std::runtime_error("binary lacks residual active search");
+#else
+                hnswlib::V0ResidualIdentity identity;
+                identity.index_sha = index.getV0SerializedIndexFingerprint();
+                identity.sidecar_sha = hnswlib::v0ResidualFileSha(options.sidecar_path);
+                identity.adjacency_sha = index.getV0Layer0AdjacencyFingerprint();
+                const hnswlib::V0SidecarHeader& header = index.getEdgeQuantV0Metadata().header();
+                companion.reset(new hnswlib::V0ResidualCompanion(
+                    options.companion_path, identity, header.dimension,
+                    header.directed_edge_count));
+                residual_config.theta = options.theta;
+                residual_config.threshold_mode =
+                    options.method == "residual-threshold";
+#endif
+            }
 #endif
         }
 
-        const auto run_query = [&index, &options, &config, approximate](
+        const auto run_query = [&index, &options, &config, &residual_config,
+                                &companion, approximate, residual](
             const float* query) {
-            if (!approximate) return index.searchKnn(query, options.k);
+            if (!approximate && !residual) return index.searchKnn(query, options.k);
+#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+            if (residual) return index.searchKnnV0ResidualFast(
+                query, options.k, residual_config, *companion);
+#endif
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
             return index.searchKnnV0ApproxFast(query, options.k, config);
 #else
@@ -392,6 +438,9 @@ int main(int argc, char** argv) {
             << "  \"ef_search\": " << options.ef_search << ",\n"
             << "  \"beta\": " << std::setprecision(17)
             << options.beta << ",\n"
+            << "  \"theta\": " << options.theta << ",\n"
+            << "  \"residual_bits\": " << (companion ? companion->bits() : 0U) << ",\n"
+            << "  \"residual_seed\": " << (companion ? companion->seed() : 0U) << ",\n"
             << "  \"cpu\": " << options.cpu << ",\n"
             << "  \"measured_queries\": " << measured_queries << ",\n"
             << "  \"query_load_ns\": " << query_load_ns << ",\n"

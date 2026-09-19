@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "experiment_name": "p3-residual-estimator-prototype-v1",
+  "base_commit": "0aa7e3fca66c4e176a63c7788cbdecff54d26f48",
+  "dataset": "gist1m",
+  "dimension": 960,
+  "pq": {"m": 32, "nbits": 8, "retrain": false},
+  "residual_bits": [32, 64, 128],
+  "projection_seeds": [17, 42, 1234],
+  "primary_seed": 42,
+  "split_seed": 20260919,
+  "split_counts": [600, 200, 200],
+  "policies": ["pq-beta", "residual-direct", "residual-threshold"],
+  "prefetch": "legacy",
+  "retry": false,
+  "target_recalls": [0.95, 0.96],
+  "match_tolerance": 0.001
+}

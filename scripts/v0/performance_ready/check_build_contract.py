@@ -22,7 +22,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--build-dir", required=True, type=Path)
     parser.add_argument("--contract", required=True,
-                        choices=("reference", "performance"))
+                        choices=("reference", "performance", "residual-reference",
+                                 "residual-quality", "residual-performance"))
     parser.add_argument(
         "--native-arch", choices=("off", "on"), default="off",
         help=("Expected HNSWLIB_ENABLE_NATIVE_ARCH value. Performance "
@@ -39,7 +40,13 @@ def main() -> int:
         "HNSWLIB_ENABLE_EDGE_QUANT_V0": "ON",
         "HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING": "ON",
     }
-    if args.contract == "reference":
+    residual = args.contract.startswith("residual-")
+    reference = args.contract in ("reference", "residual-reference", "residual-quality")
+    if residual:
+        required["HNSWLIB_ENABLE_V0_RESIDUAL_ESTIMATOR"] = "ON"
+        required["HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING"] = (
+            "OFF" if args.contract == "residual-reference" else "ON")
+    if reference:
         if args.native_arch != "off":
             parser.error("reference builds must use --native-arch off")
         required.update({

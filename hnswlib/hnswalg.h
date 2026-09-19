@@ -19,6 +19,10 @@
 #include "edge_quant_v0_metadata.h"
 #include "edge_quant_v0_metrics.h"
 #include "edge_quant_v0_query_metadata.h"
+#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_ESTIMATOR
+#include "edge_quant_v0_residual.h"
+#include "edge_quant_v0_residual_io.h"
+#endif
 #ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
 #include "edge_quant_v0_retry_shadow.h"
 #endif
@@ -516,6 +520,12 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         , V0ShadowValidationCollector* v0_shadow = nullptr
         , uint64_t v0_query_id = 0U
 #endif
+#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+        , const V0ResidualPruningConfig* v0_residual_config = nullptr
+        , const V0ResidualQueryContext* v0_residual_query = nullptr
+        , const V0ResidualCompanion* v0_residual_companion = nullptr
+        , const EdgeQuantV0Metadata* v0_residual_metadata = nullptr
+#endif
 #endif
         ) const {
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
@@ -533,7 +543,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 "Invalid V0 approximate-pruning configuration");
         }
         if (use_edge_quant_v0 && v0_approx_config == nullptr &&
-            v0_query == nullptr) {
+            v0_query == nullptr
+#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+            && v0_residual_config == nullptr
+#endif
+            ) {
             throw std::invalid_argument(
                 "V0 strict search requires a query context");
         }
@@ -636,8 +650,17 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             size_t size = getListCount((linklistsizeint*)data);
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
             V0FastEdgeRecordSpan v0_fast_edge_span;
-            if (v0_approx_config != nullptr) {
-                v0_fast_edge_span = v0_approx_metadata->fastEdgeSpan(
+            if (v0_approx_config != nullptr
+#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+                || v0_residual_config != nullptr
+#endif
+                ) {
+                const EdgeQuantV0Metadata* fast_metadata = v0_approx_metadata;
+#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+                if (v0_residual_config != nullptr)
+                    fast_metadata = v0_residual_metadata;
+#endif
+                v0_fast_edge_span = fast_metadata->fastEdgeSpan(
                     current_node_id, size);
             }
 #endif
@@ -750,6 +773,52 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 }
 #endif
                 if (!v0_candidate_exact_visited) {
+#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+                    if (v0_residual_config != nullptr &&
+                        top_candidates.size() >= ef) {
+                        const V0RawEstimateResult raw =
+                            v0_approx_query->evaluateRawFast(
+                                v0_fast_edge_span.edgeUnchecked(j - 1U),
+                                static_cast<double>(candidate_dist));
+                        if (raw.valid()) {
+                            const uint64_t ordinal =
+                                v0_residual_metadata->view().
+                                    nodeOffsetNativeUnchecked(current_node_id) +
+                                static_cast<uint64_t>(j - 1U);
+                            const uint8_t* sketch =
+                                v0_residual_companion->record(ordinal);
+                            if (v0_residual_companion->valid(sketch)) {
+                                const double corrected = v0_residual_query->correct(
+                                    raw.approximate_squared_distance, sketch,
+                                    v0_residual_companion->scale(sketch),
+                                    v0_residual_companion->offset(sketch));
+                                if (std::isfinite(corrected)) {
+                                    if (v0_collect_metrics) {
+                                        ++v0_metrics->residual_evaluated;
+                                    }
+                                    if (corrected >
+                                        (v0_residual_config->threshold_mode ?
+                                            v0_residual_config->theta : 1.0) *
+                                        static_cast<double>(lowerBound)) {
+                                        if (v0_collect_metrics) {
+                                            ++v0_metrics->residual_pruned;
+                                            ++v0_metrics->exact_distance_saved;
+                                        }
+                                        visited_array[candidate_id] =
+                                            visited_array_tag;
+                                        continue;
+                                    }
+                                } else if (v0_collect_metrics) {
+                                    ++v0_metrics->residual_fallback;
+                                }
+                            } else if (v0_collect_metrics) {
+                                ++v0_metrics->residual_fallback;
+                            }
+                        } else if (v0_collect_metrics) {
+                            ++v0_metrics->residual_fallback;
+                        }
+                    }
+#endif
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
                     if (v0_approx_config != nullptr &&
                         !v0_candidate_is_retry) {
@@ -879,6 +948,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     if (use_edge_quant_v0
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
                         && v0_approx_config == nullptr
+#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+                        && v0_residual_config == nullptr
+#endif
 #endif
                         ) {
                         // Until the exact result heap is full, lowerBound is
@@ -2088,6 +2160,12 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         , V0ShadowValidationCollector* v0_shadow = nullptr
         , uint64_t v0_query_id = 0U
 #endif
+#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+        , const V0ResidualPruningConfig* v0_residual_config = nullptr
+        , const V0ResidualQueryContext* v0_residual_query = nullptr
+        , const V0ResidualCompanion* v0_residual_companion = nullptr
+        , const EdgeQuantV0Metadata* v0_residual_metadata = nullptr
+#endif
 #endif
         ) const {
         std::priority_queue<std::pair<dist_t, labeltype >> result;
@@ -2169,6 +2247,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
 #endif
+#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+                    , v0_residual_config, v0_residual_query,
+                      v0_residual_companion, v0_residual_metadata
+#endif
 #endif
                     );
 #else
@@ -2185,6 +2267,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
+#endif
+#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+                    , v0_residual_config, v0_residual_query,
+                      v0_residual_companion, v0_residual_metadata
 #endif
 #endif
                     );
@@ -2205,6 +2291,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
 #endif
+#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+                    , v0_residual_config, v0_residual_query,
+                      v0_residual_companion, v0_residual_metadata
+#endif
 #endif
                     );
 #else
@@ -2221,6 +2311,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
 #ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
                     , v0_shadow, v0_query_id
+#endif
+#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+                    , v0_residual_config, v0_residual_query,
+                      v0_residual_companion, v0_residual_metadata
 #endif
 #endif
                     );
@@ -2504,6 +2598,60 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             query_data, k, config, nullptr,
             query_context, nullptr, metadata);
     }
+#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
+    template<bool collect_residual_metrics>
+    std::priority_queue<std::pair<dist_t, labeltype> >
+    searchKnnV0ResidualConfigured(
+        const void* query_data, size_t k,
+        const V0ResidualPruningConfig& config,
+        const V0ResidualCompanion& companion,
+        V0QueryMetrics* metrics) const {
+        if (!config.valid() || num_deleted_ != 0U)
+            throw std::invalid_argument("invalid residual search configuration");
+        requireUsableEdgeQuantV0Metadata();
+        const EdgeQuantV0Metadata& metadata = getEdgeQuantV0Metadata();
+        if (companion.dimension() != metadata.header().dimension ||
+            companion.count() != metadata.header().directed_edge_count)
+            throw std::invalid_argument("residual companion does not match sidecar");
+        const EdgeQuantV0ApproxQueryContext raw_context(
+            static_cast<const float*>(query_data), metadata.header(),
+            metadata.nativeCodebookData());
+        const V0ResidualQueryContext residual_context(
+            static_cast<const float*>(query_data), companion.matrix(),
+            companion.dimension(), companion.bits());
+        return searchKnnInternal<true, false, false, collect_residual_metrics>(
+            query_data, k, nullptr
+#ifdef HNSWLIB_ENABLE_BASELINE_TRACE
+            , nullptr
+#endif
+            , nullptr, metrics, false,
+            nullptr, &raw_context, nullptr
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+            , nullptr, 0U
+#endif
+            , &config, &residual_context, &companion, &metadata);
+    }
+
+    std::priority_queue<std::pair<dist_t, labeltype> >
+    searchKnnV0Residual(const void* query_data, size_t k,
+                        const V0ResidualPruningConfig& config,
+                        const V0ResidualCompanion& companion,
+                        V0QueryMetrics* metrics = nullptr) const {
+        V0QueryMetrics local;
+        V0QueryMetrics* active = metrics ? metrics : &local;
+        active->reset();
+        return searchKnnV0ResidualConfigured<true>(
+            query_data, k, config, companion, active);
+    }
+
+    std::priority_queue<std::pair<dist_t, labeltype> >
+    searchKnnV0ResidualFast(const void* query_data, size_t k,
+                            const V0ResidualPruningConfig& config,
+                            const V0ResidualCompanion& companion) const {
+        return searchKnnV0ResidualConfigured<false>(
+            query_data, k, config, companion, nullptr);
+    }
+#endif
 #endif
 #endif
 

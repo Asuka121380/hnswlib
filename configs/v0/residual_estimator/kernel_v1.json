@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "blocks": 7,
+  "dimension": 960,
+  "bits": [32, 64, 128],
+  "working_sets": ["l1", "larger_than_l3"],
+  "portable": true,
+  "logical_cpus": 1
+}

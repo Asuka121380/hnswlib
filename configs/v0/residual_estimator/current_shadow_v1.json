@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "ef_search": [435, 500],
+  "k": 10,
+  "development_queries": 200,
+  "shadow_sample_modulus": 1,
+  "shadow_sample_remainder": 0
+}

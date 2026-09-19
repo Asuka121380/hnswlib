@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "synthetic": true,
+  "dimension": 8,
+  "residual_bits": [8],
+  "projection_seeds": [42],
+  "query_count": 10,
+  "purpose": "C++ companion and search path parity"
+}

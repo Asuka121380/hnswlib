@@ -16,6 +16,8 @@ def slice_between(text: str, start: str, end: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--header", required=True, type=Path)
+    parser.add_argument("--residual-header", type=Path)
+    parser.add_argument("--search-header", type=Path)
     args = parser.parse_args()
     text = args.header.read_text(encoding="utf-8")
     fast_lut = slice_between(text, "class V0ApproxQueryLut", "enum class V0BoundStatus")
@@ -45,6 +47,23 @@ def main() -> int:
         for token in missing:
             print(f"  missing fast-path token: {token}")
         return 1
+    if args.residual_header:
+        residual = args.residual_header.read_text(encoding="utf-8")
+        query = slice_between(residual, "class V0ResidualQueryContext", "// Offline reference")
+        banned = ("std::chrono", "std::ofstream", "std::nextafter", "std::sqrt")
+        failures = [token for token in banned if token in query]
+        if failures:
+            print("residual query-path source audit FAILED: " + ", ".join(failures))
+            return 1
+    if args.search_header:
+        source = args.search_header.read_text(encoding="utf-8")
+        path = slice_between(source, "if (v0_residual_config != nullptr &&",
+                             "#endif\n#ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING")
+        banned = ("std::chrono", "std::ofstream", "unordered_map", "std::nextafter")
+        failures = [token for token in banned if token in path]
+        if failures:
+            print("residual search-path source audit FAILED: " + ", ".join(failures))
+            return 1
     print("raw_fast_v1 source audit OK")
     return 0
 

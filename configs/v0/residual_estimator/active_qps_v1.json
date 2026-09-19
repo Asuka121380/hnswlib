@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "k": 10,
+  "target_recalls": [0.95, 0.96],
+  "match_tolerance": 0.001,
+  "blocks": 5,
+  "repeats": 5,
+  "warmup_queries": 100,
+  "query_start": 0,
+  "query_count": 1000,
+  "prefetch": "legacy"
+}
