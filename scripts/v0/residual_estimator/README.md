@@ -55,8 +55,8 @@ If interrupted in the middle of a chunk, the partial file has extra records
 and resume refuses it; remove both `.partial` and `.checkpoint` to restart.
 For the Slurm C stage, set `RESIDUAL_RESUME=1` to pass `--resume`.
 
-On Slurm, `submit_prototype.sh` accepts `--stage A0|A1|A2|B|C|D-quality|D-match|D-qps`
-plus `--partition --qos --node --memory --time --cpus --resource-profile`.
+On Slurm, `submit_prototype.sh` accepts `--stage A0|A1|A2|B|C|D-quality|D-match|D-qps|D-tune-quality|D-tune-select|D-tune-qps`
+plus `--account --partition --qos --node --memory --time --cpus --resource-profile`.
 The node option is optional; the others are required. Set
 `RESIDUAL_RUN_ROOT`, `RESIDUAL_PYTHON`, `RESIDUAL_REFERENCE_BUILD`, and
 `RESIDUAL_PERFORMANCE_BUILD` to absolute paths. A0 also needs
@@ -77,6 +77,21 @@ with maximum spread 0.001. The timed comparison uses only these three
 methods, three randomized blocks, five repeats, and 1000 queries per
 case. An unmatched quality selection is rejected before QPS. Both
 quality and performance binaries use `HNSWLIB_ENABLE_NATIVE_ARCH=OFF`.
+
+The follow-up residual-only tuning uses the same frozen 128-bit companion
+and query split. `D-tune-quality` measures 16 threshold cases: ef 500 with
+theta 1.08/1.10/1.12/1.14, ef 525 with 1.06/1.08/1.10/1.12, ef 550 with
+1.04/1.06/1.08/1.10, and ef 575 with 1.02/1.04/1.06/1.08. It also
+remeasures residual-direct at ef 600 as an internal anchor. Ef 475 and
+theta 1.26 are excluded. `D-tune-select` retains every threshold case
+with measured development+selection recall@10 at least 0.9555 and the
+direct anchor; if the anchor or every threshold case misses the floor,
+selection fails before timing. `D-tune-qps` measures every retained case
+in five randomized blocks, five repeats and 1000 queries per case, then
+writes `analysis/residual-tuning-summary.json`. The ranking is by median
+QPS within this residual-only run; the old PQ timing is historical context.
+Audit query IDs remain excluded from tuning and may be evaluated once the
+winner is frozen. Both staged builds must have native architecture OFF.
 
 The C++ tests cover file identity and corruption, bit order, the real encoder
 on a small graph, invalid-record fallback, and the no-retry search path.

@@ -106,6 +106,40 @@ PY
       --qps "$run_root/active-qps/manifest.json" \
       --output "$run_root/analysis/active-summary.json"
     ;;
+  D-tune-quality)
+    : "${RESIDUAL_COMPANION:?set RESIDUAL_COMPANION}"
+    "$RESIDUAL_PYTHON" scripts/v0/performance_ready/check_build_contract.py \
+      --build-dir "$RESIDUAL_REFERENCE_BUILD" --contract residual-quality \
+      --native-arch off
+    "$RESIDUAL_PYTHON" "$script/run_active_matrix.py" --stage quality \
+      --config configs/v0/residual_estimator/residual_tuning_quality_v1.json \
+      --contract "$contract" --selection "$selection" \
+      --runner "$RESIDUAL_REFERENCE_BUILD/v0_search_runner" \
+      --companion "$RESIDUAL_COMPANION" \
+      --output "$run_root/residual-tuning-quality"
+    ;;
+  D-tune-select)
+    "$RESIDUAL_PYTHON" "$script/select_residual_tuning.py" \
+      --quality "$run_root/residual-tuning-quality/manifest.json" \
+      --config configs/v0/residual_estimator/residual_tuning_qps_v1.json \
+      --output "$run_root/residual-tuning-cases.json"
+    ;;
+  D-tune-qps)
+    : "${RESIDUAL_COMPANION:?set RESIDUAL_COMPANION}"
+    "$RESIDUAL_PYTHON" scripts/v0/performance_ready/check_build_contract.py \
+      --build-dir "$RESIDUAL_PERFORMANCE_BUILD" \
+      --contract residual-performance --native-arch off
+    "$RESIDUAL_PYTHON" "$script/run_active_matrix.py" --stage qps \
+      --config "$run_root/residual-tuning-cases.json" \
+      --contract "$contract" --selection "$selection" \
+      --runner "$RESIDUAL_PERFORMANCE_BUILD/v0_performance_runner" \
+      --companion "$RESIDUAL_COMPANION" \
+      --output "$run_root/residual-tuning-qps"
+    "$RESIDUAL_PYTHON" "$script/summarize_residual_tuning.py" \
+      --quality "$run_root/residual-tuning-quality/manifest.json" \
+      --qps "$run_root/residual-tuning-qps/manifest.json" \
+      --output "$run_root/analysis/residual-tuning-summary.json"
+    ;;
   *) echo "unknown stage: $RESIDUAL_STAGE" >&2; exit 2 ;;
 esac
 printf 'completed stage=%s repo=%s run=%s\n' "$RESIDUAL_STAGE" "$root" "$run_root"

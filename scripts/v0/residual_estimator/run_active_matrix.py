@@ -1,6 +1,7 @@
 """Run finite active quality or timed QPS cases with explicit manifests."""
 
 import argparse
+import math
 import random
 import struct
 import subprocess
@@ -10,6 +11,27 @@ from common import mark_complete, read_json, sha256, write_json
 
 
 def quality_cases(config: dict, selection: dict) -> list[dict]:
+    if "residual_theta_by_ef" in config:
+        grid = config["residual_theta_by_ef"]
+        if not isinstance(grid, dict) or not grid:
+            raise ValueError("residual tuning requires an ef/theta grid")
+        cases = []
+        for ef_text, thetas in sorted(grid.items(), key=lambda item: int(item[0])):
+            ef = int(ef_text)
+            if ef <= 0 or str(ef) != ef_text or not isinstance(thetas, list) or not thetas:
+                raise ValueError("invalid residual tuning ef grid")
+            if any(not isinstance(theta, (int, float)) or isinstance(theta, bool)
+                   or not math.isfinite(theta) or theta <= 1.0 for theta in thetas):
+                raise ValueError("residual tuning requires finite theta > 1")
+            if len(thetas) != len(set(thetas)):
+                raise ValueError("duplicate residual tuning theta")
+            cases.extend({"method": "residual-threshold", "ef": ef,
+                          "theta": theta} for theta in thetas)
+        anchor = config["direct_anchor_ef"]
+        if not isinstance(anchor, int) or isinstance(anchor, bool) or anchor <= 0:
+            raise ValueError("invalid residual direct anchor ef")
+        return cases + [{"method": "residual-direct", "ef": anchor,
+                         "theta": 1.0}]
     if "ef_search_by_method" in config:
         grid = config["ef_search_by_method"]
         if set(grid) != {"baseline", "approx-no-retry", "residual-direct"}:
@@ -78,6 +100,10 @@ def main() -> None:
         if config.get("require_matched") and any(
                 not case.get("matched", False) for case in cases):
             raise ValueError("QPS requires recall-matched cases")
+        if not isinstance(config.get("repeats"), int) or config["repeats"] < 5:
+            raise ValueError("performance runner requires at least five repeats")
+        if not isinstance(config.get("blocks"), int) or config["blocks"] < 2:
+            raise ValueError("paired QPS requires at least two blocks")
     with Path(args.companion).open("rb") as source:
         header = source.read(24)
     if len(header) != 24 or header[:8] != b"V0RES001":
@@ -124,7 +150,8 @@ def main() -> None:
                        "--query-count", str(config["query_count"]),
                        "--ef-search", str(case["ef"]), "--k", str(config["k"]),
                        "--warmup-queries", str(config["warmup_queries"]),
-                       "--repeats", str(config["repeats"])]
+                       "--repeats", str(config["repeats"]),
+                       "--prefetch", config.get("prefetch", "legacy")]
             if method != "baseline":
                 command += ["--sidecar-path", assets["sidecar"]["path"]]
             if method == "approx-no-retry":
