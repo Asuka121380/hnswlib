@@ -23,6 +23,16 @@ from summarize_residual_tuning import summarize as summarize_residual_tuning  # 
 
 
 class PipelineTest(unittest.TestCase):
+    def test_curve_baseline_grid_runs_only_missing_efs(self):
+        config = json.loads((Path(__file__).resolve().parents[2] /
+                             "configs/v0/residual_estimator/curve_baseline_quality_v1.json")
+                            .read_text())
+        self.assertEqual(quality_cases(config, {}), [
+            {"method": "baseline", "ef": 350},
+            {"method": "baseline", "ef": 500},
+            {"method": "baseline", "ef": 600},
+        ])
+
     def test_quality_matrix_excludes_audit_queries(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

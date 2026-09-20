@@ -11,6 +11,13 @@ from common import mark_complete, read_json, sha256, write_json
 
 
 def quality_cases(config: dict, selection: dict) -> list[dict]:
+    if "baseline_ef_search" in config:
+        efs = config["baseline_ef_search"]
+        if (not isinstance(efs, list) or not efs or
+                any(not isinstance(ef, int) or isinstance(ef, bool) or ef <= 0
+                    for ef in efs) or len(efs) != len(set(efs))):
+            raise ValueError("invalid baseline ef grid")
+        return [{"method": "baseline", "ef": ef} for ef in efs]
     if "residual_theta_by_ef" in config:
         grid = config["residual_theta_by_ef"]
         if not isinstance(grid, dict) or not grid:

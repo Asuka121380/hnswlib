@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "k": 10,
+  "baseline_ef_search": [350, 500, 600]
+}
