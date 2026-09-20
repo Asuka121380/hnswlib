@@ -2,7 +2,7 @@
   "schema_version": 1,
   "k": 10,
   "ef_search": [350, 435, 500, 600],
-  "beta_values": [1.30, 1.40, 1.45, 1.50, 1.55],
+  "beta_values": [1.45],
   "query_start": 0,
   "query_count": 1000,
   "primary_seed": 42
