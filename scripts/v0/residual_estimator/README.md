@@ -45,6 +45,9 @@ Replace `64` with the primary `selected_bits[0]` in `selection.json`. The
 encoder accepts `--chunk-edges` from 1 to 4096 and prints record count,
 invalid count, elapsed seconds, and output bytes. The selected `matrix.f32`
 must match the seed and bit length passed to the encoder.
+The quality matrix and matched-recall selection use only development and
+selection query IDs from the frozen split. Audit queries are excluded from
+that selection; the later full-query QPS run occurs after cases are frozen.
 Pass `--resume` after an interrupted encoder run to continue from its last
 complete checkpoint. The encoder verifies the saved index/sidecar identity,
 matrix bytes, partial size and checkpoint payload SHA before appending.

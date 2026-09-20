@@ -38,9 +38,21 @@ def main() -> None:
     assets = contract["assets"]
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
+    quality_query_ids = None
     if args.stage == "quality":
         if "dataset_config" not in assets:
             raise ValueError("quality stage requires dataset_config")
+        split = read_json(contract["split_path"])
+        development = set(split["development"])
+        selection_ids = set(split["selection"])
+        audit = set(split["audit"])
+        if not development or not selection_ids or development & selection_ids or \
+                (development | selection_ids) & audit:
+            raise ValueError("invalid quality query split")
+        quality_query_ids = output / "quality-query-ids.txt"
+        quality_query_ids.write_text(
+            "".join(f"{query_id}\n" for query_id in sorted(development | selection_ids)),
+            encoding="utf-8")
         cases = quality_cases(config, selection)
     else:
         cases = config.get("matched_cases", [])
@@ -71,8 +83,7 @@ def main() -> None:
                        "--index-path", assets["index"]["path"],
                        "--sidecar-path", assets["sidecar"]["path"],
                        "--output-dir", str(case_dir), "--mode", mode,
-                       "--query-start", str(config["query_start"]),
-                       "--query-count", str(config["query_count"]),
+                       "--query-id-file", str(quality_query_ids),
                        "--ef-search", str(case["ef"]), "--k", str(config["k"])]
             if method == "approx-no-retry":
                 command += ["--approx-beta", str(case["beta"])]
@@ -112,6 +123,9 @@ def main() -> None:
                 "contract": str(Path(args.contract).resolve()),
                 "selection": str(Path(args.selection).resolve()),
                 "companion_sha256": sha256(args.companion), "runs": runs}
+    if quality_query_ids is not None:
+        manifest["quality_selection_scope"] = "development+selection"
+        manifest["query_id_file_sha256"] = sha256(quality_query_ids)
     write_json(output / "manifest.json", manifest)
     mark_complete(output, {"config": sha256(args.config),
                            "selection": sha256(args.selection)},

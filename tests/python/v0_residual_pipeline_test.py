@@ -1,5 +1,6 @@
 """Finite active matrix and paired summary regression tests."""
 
+import json
 import sys
 import struct
 import tempfile
@@ -14,11 +15,92 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] /
 from common import sha256, write_json  # noqa: E402
 from capture_current_trace import main as capture_current_trace  # noqa: E402
 from encode_sketch import edge_dtype, open_edges  # noqa: E402
-from run_active_matrix import quality_cases  # noqa: E402
+from run_active_matrix import quality_cases, main as run_active_matrix  # noqa: E402
+from select_matched_recall import main as select_matched_recall  # noqa: E402
 from summarize_active import summarize  # noqa: E402
 
 
 class PipelineTest(unittest.TestCase):
+    def test_quality_matrix_excludes_audit_queries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            split = root / "split.json"
+            contract = root / "contract.json"
+            selection = root / "selection.json"
+            config = root / "config.json"
+            companion = root / "companion.v0res"
+            output = root / "quality"
+            write_json(split, {"development": [0], "selection": [1],
+                               "audit": [2]})
+            write_json(contract, {"split_path": str(split), "assets": {
+                key: {"path": key} for key in
+                ("dataset_config", "index", "sidecar")}})
+            write_json(selection, {"selected_bits": [64], "choices": [
+                {"bits": 64, "primary_theta": 1.1}]})
+            write_json(config, {"ef_search": [350], "beta_values": [1.3],
+                                "k": 10, "query_start": 0, "query_count": 3})
+            companion.write_bytes(b"V0RES001" + bytes(12) +
+                                  (64).to_bytes(4, "little"))
+            calls = []
+
+            def fake_run(command, check):
+                self.assertTrue(check)
+                calls.append(command)
+                target = Path(command[command.index("--output-dir") + 1])
+                write_json(target / "summary.json", {"status": "valid"})
+
+            argv = ["run_active_matrix.py", "--stage", "quality",
+                    "--config", str(config), "--contract", str(contract),
+                    "--selection", str(selection), "--runner", "runner",
+                    "--companion", str(companion), "--output", str(output)]
+            with patch("sys.argv", argv), patch(
+                    "run_active_matrix.subprocess.run", side_effect=fake_run):
+                run_active_matrix()
+            self.assertEqual(len(calls), 4)
+            self.assertEqual((output / "quality-query-ids.txt").read_text()
+                             .splitlines(), ["0", "1"])
+            self.assertTrue(all("--query-id-file" in command for command in calls))
+
+    def test_matched_recall_excludes_audit_queries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            split, contract = root / "split.json", root / "contract.json"
+            quality, config = root / "quality.json", root / "config.json"
+            output = root / "matched.json"
+            write_json(split, {"development": [0], "selection": [1],
+                               "audit": [2]})
+            write_json(contract, {"split_path": str(split)})
+            write_json(config, {"target_recalls": [0.95],
+                                "match_tolerance": 0.01})
+            runs = []
+            for method, ef, selection_recall, audit_recall in (
+                    ("baseline", 350, 0.95, 0.0),
+                    ("baseline", 500, 0.90, 1.0),
+                    ("approx-no-retry", 350, 0.95, 0.0),
+                    ("residual-direct", 350, 0.95, 0.0)):
+                directory = root / f"{method}-{ef}"
+                directory.mkdir()
+                result = directory / "summary.json"
+                write_json(result, {"mean_v0_recall_at_k": audit_recall})
+                (directory / "query_metrics.csv").write_text(
+                    "query_id,v0_recall_at_k\n"
+                    f"0,{selection_recall}\n1,{selection_recall}\n"
+                    f"2,{audit_recall}\n", encoding="utf-8")
+                runs.append({"case": {"method": method, "ef": ef},
+                             "result": str(result)})
+            write_json(quality, {"stage": "quality", "contract": str(contract),
+                                 "runs": runs})
+            argv = ["select_matched_recall.py", "--quality", str(quality),
+                    "--config", str(config), "--output", str(output)]
+            with patch("sys.argv", argv):
+                select_matched_recall()
+            selected = json.loads(output.read_text())
+            self.assertEqual(selected["quality_selection_scope"],
+                             "development+selection")
+            self.assertEqual(selected["quality_selection_query_count"], 2)
+            self.assertEqual(selected["quality_selection"][0]["points"][0]
+                             ["case"]["ef"], 350)
+
     def test_current_shadow_loads_index_once_per_ef(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
