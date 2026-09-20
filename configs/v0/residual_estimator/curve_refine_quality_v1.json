@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "k": 10,
+  "curve_quality_candidates": [
+    {"method": "residual-direct", "ef": 500, "theta": 1.0},
+    {"method": "residual-direct", "ef": 935, "theta": 1.0},
+    {"method": "residual-threshold", "ef": 690, "theta": 1.08}
+  ]
+}

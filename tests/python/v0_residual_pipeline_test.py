@@ -23,6 +23,16 @@ from summarize_residual_tuning import summarize as summarize_residual_tuning  # 
 
 
 class PipelineTest(unittest.TestCase):
+    def test_curve_refine_grid_covers_only_three_unmatched_cases(self):
+        config = json.loads((Path(__file__).resolve().parents[2] /
+                             "configs/v0/residual_estimator/curve_refine_quality_v1.json")
+                            .read_text())
+        self.assertEqual(quality_cases(config, {}), [
+            {"method": "residual-direct", "ef": 500, "theta": 1.0},
+            {"method": "residual-direct", "ef": 935, "theta": 1.0},
+            {"method": "residual-threshold", "ef": 690, "theta": 1.08},
+        ])
+
     def test_curve_candidate_grid_is_finite_and_excludes_baseline(self):
         config = json.loads((Path(__file__).resolve().parents[2] /
                              "configs/v0/residual_estimator/curve_candidate_quality_v1.json")
