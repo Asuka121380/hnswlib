@@ -55,7 +55,7 @@ If interrupted in the middle of a chunk, the partial file has extra records
 and resume refuses it; remove both `.partial` and `.checkpoint` to restart.
 For the Slurm C stage, set `RESIDUAL_RESUME=1` to pass `--resume`.
 
-On Slurm, `submit_prototype.sh` accepts `--stage A0|A1|A2|B|C|D-quality|D-match|D-qps|D-tune-quality|D-tune-supplement-quality|D-tune-select|D-tune-qps`
+On Slurm, `submit_prototype.sh` accepts `--stage A0|A1|A2|B|C|D-quality|D-match|D-qps|D-tune-quality|D-tune-supplement-quality|D-tune-fine-quality|D-tune-select|D-tune-qps`
 plus `--account --partition --qos --node --memory --time --cpus --resource-profile`.
 The node option is optional; the others are required. Set
 `RESIDUAL_RUN_ROOT`, `RESIDUAL_PYTHON`, `RESIDUAL_REFERENCE_BUILD`, and
@@ -102,6 +102,12 @@ ef 500 with theta 1.04. It writes to `residual-tuning-supplement-quality`
 without changing the completed 17-case quality manifest or the existing
 selection. Compare these recalls with the earlier cases before freezing a
 smaller QPS shortlist.
+
+`D-tune-fine-quality` checks ef 475/theta 1.07 and ef 500/theta 1.05,
+using the same frozen query IDs and a separate
+`residual-tuning-fine-quality` directory. Select QPS candidates against
+the measured baseline ef 405 recall@10 of 0.95575, not against the
+residual-direct anchor recall of 0.95550.
 
 The C++ tests cover file identity and corruption, bit order, the real encoder
 on a small graph, invalid-record fallback, and the no-retry search path.

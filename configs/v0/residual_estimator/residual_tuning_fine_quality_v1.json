@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "k": 10,
+  "residual_theta_by_ef": {
+    "475": [1.07],
+    "500": [1.05]
+  }
+}
