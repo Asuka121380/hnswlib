@@ -26,6 +26,17 @@ done
    -n "${RESIDUAL_REFERENCE_BUILD:-}" && -n "${RESIDUAL_PERFORMANCE_BUILD:-}" ]] || {
   echo 'set RESIDUAL_RUN_ROOT, RESIDUAL_PYTHON and both build paths' >&2; exit 2;
 }
+if [[ "$stage" == D-quality || "$stage" == D-tune-quality ]]; then
+  runner="$RESIDUAL_REFERENCE_BUILD/v0_search_runner"
+  [[ -x "$runner" ]] || {
+    echo "missing executable quality runner: $runner" >&2; exit 2;
+  }
+  if ! "$runner" --help 2>&1 | grep -Fq -- '--query-id-file'; then
+    echo "quality runner lacks --query-id-file: $runner" >&2
+    echo 'Set RESIDUAL_REFERENCE_BUILD to the staged quality build.' >&2
+    exit 2
+  fi
+fi
 mkdir -p "$RESIDUAL_RUN_ROOT/logs"
 export RESIDUAL_STAGE="$stage" RESIDUAL_RESOURCE_PROFILE="$profile"
 args=(--parsable --partition="$partition" --qos="$qos" --mem="$memory"

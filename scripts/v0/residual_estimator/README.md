@@ -92,6 +92,9 @@ writes `analysis/residual-tuning-summary.json`. The ranking is by median
 QPS within this residual-only run; the old PQ timing is historical context.
 Audit query IDs remain excluded from tuning and may be evaluated once the
 winner is frozen. Both staged builds must have native architecture OFF.
+The quality runner must also advertise `--query-id-file` in `--help`;
+the earlier residual reference binary does not support frozen query IDs.
+`submit_prototype.sh` checks this before submitting quality jobs.
 
 The C++ tests cover file identity and corruption, bit order, the real encoder
 on a small graph, invalid-record fallback, and the no-retry search path.
