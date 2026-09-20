@@ -11,6 +11,34 @@ from common import mark_complete, read_json, sha256, write_json
 
 
 def quality_cases(config: dict, selection: dict) -> list[dict]:
+    if "curve_quality_candidates" in config:
+        cases = config["curve_quality_candidates"]
+        if not isinstance(cases, list) or not cases:
+            raise ValueError("curve quality requires candidate cases")
+        seen = set()
+        for case in cases:
+            if not isinstance(case, dict) or case.get("method") not in (
+                    "approx-no-retry", "residual-direct", "residual-threshold"):
+                raise ValueError("invalid curve quality method")
+            method, ef = case["method"], case.get("ef")
+            if not isinstance(ef, int) or isinstance(ef, bool) or ef <= 0:
+                raise ValueError("invalid curve quality ef")
+            parameter = "beta" if method == "approx-no-retry" else "theta"
+            if set(case) != {"method", "ef", parameter}:
+                raise ValueError("invalid curve quality case fields")
+            value = case[parameter]
+            if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                    or not math.isfinite(value) or value <= 0):
+                raise ValueError("invalid curve quality parameter")
+            if method == "residual-direct" and value != 1.0:
+                raise ValueError("residual-direct requires theta=1")
+            if method == "residual-threshold" and value <= 1.0:
+                raise ValueError("residual-threshold requires theta>1")
+            key = (method, ef, value)
+            if key in seen:
+                raise ValueError("duplicate curve quality case")
+            seen.add(key)
+        return cases
     if "baseline_ef_search" in config:
         efs = config["baseline_ef_search"]
         if (not isinstance(efs, list) or not efs or

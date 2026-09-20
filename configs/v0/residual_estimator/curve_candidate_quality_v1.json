@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "k": 10,
+  "curve_quality_candidates": [
+    {"method": "approx-no-retry", "ef": 400, "beta": 1.45},
+    {"method": "approx-no-retry", "ef": 500, "beta": 1.45},
+    {"method": "approx-no-retry", "ef": 570, "beta": 1.45},
+    {"method": "approx-no-retry", "ef": 700, "beta": 1.45},
+    {"method": "residual-direct", "ef": 520, "theta": 1.0},
+    {"method": "residual-direct", "ef": 650, "theta": 1.0},
+    {"method": "residual-direct", "ef": 750, "theta": 1.0},
+    {"method": "residual-direct", "ef": 900, "theta": 1.0},
+    {"method": "residual-threshold", "ef": 400, "theta": 1.08},
+    {"method": "residual-threshold", "ef": 425, "theta": 1.04},
+    {"method": "residual-threshold", "ef": 675, "theta": 1.08},
+    {"method": "residual-threshold", "ef": 700, "theta": 1.06}
+  ]
+}

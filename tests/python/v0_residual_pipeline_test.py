@@ -23,6 +23,23 @@ from summarize_residual_tuning import summarize as summarize_residual_tuning  # 
 
 
 class PipelineTest(unittest.TestCase):
+    def test_curve_candidate_grid_is_finite_and_excludes_baseline(self):
+        config = json.loads((Path(__file__).resolve().parents[2] /
+                             "configs/v0/residual_estimator/curve_candidate_quality_v1.json")
+                            .read_text())
+        cases = quality_cases(config, {})
+        self.assertEqual(len(cases), 12)
+        self.assertEqual({case["method"] for case in cases},
+                         {"approx-no-retry", "residual-direct",
+                          "residual-threshold"})
+        self.assertEqual([case["ef"] for case in cases if
+                          case["method"] == "approx-no-retry"],
+                         [400, 500, 570, 700])
+        self.assertTrue(all(case.get("beta") == 1.45 for case in cases
+                            if case["method"] == "approx-no-retry"))
+        self.assertTrue(all(case.get("theta") == 1.0 for case in cases
+                            if case["method"] == "residual-direct"))
+
     def test_curve_baseline_grid_runs_only_missing_efs(self):
         config = json.loads((Path(__file__).resolve().parents[2] /
                              "configs/v0/residual_estimator/curve_baseline_quality_v1.json")

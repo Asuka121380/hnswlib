@@ -100,6 +100,18 @@ PY
       --companion "$RESIDUAL_COMPANION" \
       --output "$run_root/curve-baseline-quality"
     ;;
+  D-curve-candidate-quality)
+    : "${RESIDUAL_COMPANION:?set RESIDUAL_COMPANION}"
+    "$RESIDUAL_PYTHON" scripts/v0/performance_ready/check_build_contract.py \
+      --build-dir "$RESIDUAL_REFERENCE_BUILD" --contract residual-quality \
+      --native-arch off
+    "$RESIDUAL_PYTHON" "$script/run_active_matrix.py" --stage quality \
+      --config configs/v0/residual_estimator/curve_candidate_quality_v1.json \
+      --contract "$contract" --selection "$selection" \
+      --runner "$RESIDUAL_REFERENCE_BUILD/v0_search_runner" \
+      --companion "$RESIDUAL_COMPANION" \
+      --output "$run_root/curve-candidate-quality"
+    ;;
   D-match)
     "$RESIDUAL_PYTHON" "$script/select_matched_recall.py" \
       --quality "$run_root/active-quality/manifest.json" \
