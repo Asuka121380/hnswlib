@@ -74,7 +74,7 @@ The preliminary matched-recall run uses 11 quality cases: baseline ef
 395/405/415/425/435, original PQ beta 1.45 at ef 450/465/480, and
 128-bit residual-direct at ef 575/600/625. It targets recall@10 0.9555
 with maximum spread 0.001. The timed comparison uses only these three
-methods, three randomized blocks, three repeats, and 1000 queries per
+methods, three randomized blocks, five repeats, and 1000 queries per
 case. An unmatched quality selection is rejected before QPS. Both
 quality and performance binaries use `HNSWLIB_ENABLE_NATIVE_ARCH=OFF`.
 
