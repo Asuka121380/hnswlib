@@ -26,10 +26,13 @@ done
    -n "${RESIDUAL_REFERENCE_BUILD:-}" && -n "${RESIDUAL_PERFORMANCE_BUILD:-}" ]] || {
   echo 'set RESIDUAL_RUN_ROOT, RESIDUAL_PYTHON and both build paths' >&2; exit 2;
 }
-mkdir -p logs
+mkdir -p "$RESIDUAL_RUN_ROOT/logs"
 export RESIDUAL_STAGE="$stage" RESIDUAL_RESOURCE_PROFILE="$profile"
 args=(--parsable --partition="$partition" --qos="$qos" --mem="$memory"
-      --time="$time_limit" --cpus-per-task="$cpus" --export=ALL)
+      --time="$time_limit" --cpus-per-task="$cpus" --export=ALL
+      --job-name="$stage"
+      --output="$RESIDUAL_RUN_ROOT/logs/$stage-%j.out"
+      --error="$RESIDUAL_RUN_ROOT/logs/$stage-%j.err")
 [[ -z "$account" ]] || args+=(--account="$account")
 [[ -z "$node" ]] || args+=(--nodelist="$node")
 [[ "$profile" != exclusive ]] || args+=(--exclusive)
