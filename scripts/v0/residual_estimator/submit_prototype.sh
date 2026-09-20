@@ -16,7 +16,7 @@ while (($#)); do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ "$stage" =~ ^(A0|A1|A2|B|C|D-quality|D-match|D-qps|D-tune-quality|D-tune-supplement-quality|D-tune-fine-quality|D-tune-select|D-tune-qps)$ ]] || { echo 'invalid --stage' >&2; exit 2; }
+[[ "$stage" =~ ^(A0|A1|A2|B|C|D-quality|D-match|D-qps|D-tune-quality|D-tune-supplement-quality|D-tune-fine-quality|D-tune-select|D-tune-qps|D-target-qps)$ ]] || { echo 'invalid --stage' >&2; exit 2; }
 [[ "$profile" == exploratory || "$profile" == exclusive ]] || { echo 'invalid --resource-profile' >&2; exit 2; }
 [[ -n "$partition" && -n "$qos" && -n "$memory" && -n "$time_limit" && -n "$cpus" ]] || {
   echo 'partition, qos, memory, time and cpus are required' >&2; exit 2;
@@ -35,6 +35,15 @@ if [[ "$stage" == D-quality || "$stage" == D-tune-quality || "$stage" == D-tune-
     echo "quality runner lacks --query-id-file: $runner" >&2
     echo 'Set RESIDUAL_REFERENCE_BUILD to the staged quality build.' >&2
     exit 2
+  fi
+fi
+if [[ "$stage" == D-target-qps ]]; then
+  runner="$RESIDUAL_PERFORMANCE_BUILD/v0_performance_runner"
+  [[ -x "$runner" ]] || {
+    echo "missing executable performance runner: $runner" >&2; exit 2;
+  }
+  if ! "$runner" --help 2>&1 | grep -Fq -- 'residual-threshold'; then
+    echo "performance runner lacks residual-threshold: $runner" >&2; exit 2;
   fi
 fi
 mkdir -p "$RESIDUAL_RUN_ROOT/logs"

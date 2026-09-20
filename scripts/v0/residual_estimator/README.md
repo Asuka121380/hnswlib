@@ -55,7 +55,7 @@ If interrupted in the middle of a chunk, the partial file has extra records
 and resume refuses it; remove both `.partial` and `.checkpoint` to restart.
 For the Slurm C stage, set `RESIDUAL_RESUME=1` to pass `--resume`.
 
-On Slurm, `submit_prototype.sh` accepts `--stage A0|A1|A2|B|C|D-quality|D-match|D-qps|D-tune-quality|D-tune-supplement-quality|D-tune-fine-quality|D-tune-select|D-tune-qps`
+On Slurm, `submit_prototype.sh` accepts `--stage A0|A1|A2|B|C|D-quality|D-match|D-qps|D-tune-quality|D-tune-supplement-quality|D-tune-fine-quality|D-tune-select|D-tune-qps|D-target-qps`
 plus `--account --partition --qos --node --memory --time --cpus --resource-profile`.
 The node option is optional; the others are required. Set
 `RESIDUAL_RUN_ROOT`, `RESIDUAL_PYTHON`, `RESIDUAL_REFERENCE_BUILD`, and
@@ -108,6 +108,16 @@ using the same frozen query IDs and a separate
 `residual-tuning-fine-quality` directory. Select QPS candidates against
 the measured baseline ef 405 recall@10 of 0.95575, not against the
 residual-direct anchor recall of 0.95550.
+
+`D-target-qps` freezes measured recall from the completed active,
+supplement, and fine-quality manifests. It uses the measured baseline ef
+405 recall on the same frozen 800 query IDs and accepts cases within
+plus or minus 0.001 of that recall. The five cases are baseline ef 405,
+original PQ beta 1.45/ef 465, residual threshold ef 500/theta 1.04 and
+1.05, and residual-direct ef 600. Selection rejects a case outside the
+window. QPS uses five randomized paired blocks, 1000 queries, five
+repeats per case, and native architecture OFF, then writes
+`analysis/targeted-qps-summary.json`.
 
 The C++ tests cover file identity and corruption, bit order, the real encoder
 on a small graph, invalid-record fallback, and the no-retry search path.

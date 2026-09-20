@@ -179,6 +179,32 @@ PY
       --qps "$run_root/residual-tuning-qps/manifest.json" \
       --output "$run_root/analysis/residual-tuning-summary.json"
     ;;
+  D-target-qps)
+    : "${RESIDUAL_COMPANION:?set RESIDUAL_COMPANION}"
+    if ! "$RESIDUAL_PERFORMANCE_BUILD/v0_performance_runner" --help 2>&1 | \
+        grep -Fq -- 'residual-threshold'; then
+      echo "performance runner lacks residual-threshold" >&2
+      exit 2
+    fi
+    "$RESIDUAL_PYTHON" "$script/select_targeted_qps.py" \
+      --active-quality "$run_root/active-quality/manifest.json" \
+      --supplement-quality "$run_root/residual-tuning-supplement-quality/manifest.json" \
+      --fine-quality "$run_root/residual-tuning-fine-quality/manifest.json" \
+      --config configs/v0/residual_estimator/targeted_qps_v1.json \
+      --output "$run_root/targeted-qps-cases.json"
+    "$RESIDUAL_PYTHON" scripts/v0/performance_ready/check_build_contract.py \
+      --build-dir "$RESIDUAL_PERFORMANCE_BUILD" \
+      --contract residual-performance --native-arch off
+    "$RESIDUAL_PYTHON" "$script/run_active_matrix.py" --stage qps \
+      --config "$run_root/targeted-qps-cases.json" \
+      --contract "$contract" --selection "$selection" \
+      --runner "$RESIDUAL_PERFORMANCE_BUILD/v0_performance_runner" \
+      --companion "$RESIDUAL_COMPANION" \
+      --output "$run_root/targeted-qps"
+    "$RESIDUAL_PYTHON" "$script/summarize_targeted_qps.py" \
+      --qps "$run_root/targeted-qps/manifest.json" \
+      --output "$run_root/analysis/targeted-qps-summary.json"
+    ;;
   *) echo "unknown stage: $RESIDUAL_STAGE" >&2; exit 2 ;;
 esac
 printf 'completed stage=%s repo=%s run=%s\n' "$RESIDUAL_STAGE" "$root" "$run_root"

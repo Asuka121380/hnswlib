@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "k": 10,
+  "baseline_ef": 405,
+  "recall_tolerance": 0.001,
+  "candidates": [
+    {"source": "active", "method": "approx-no-retry", "ef": 465, "beta": 1.45},
+    {"source": "supplement", "method": "residual-threshold", "ef": 500, "theta": 1.04},
+    {"source": "fine", "method": "residual-threshold", "ef": 500, "theta": 1.05},
+    {"source": "active", "method": "residual-direct", "ef": 600, "theta": 1.0}
+  ],
+  "require_matched": true,
+  "blocks": 5,
+  "repeats": 5,
+  "warmup_queries": 100,
+  "query_start": 0,
+  "query_count": 1000,
+  "prefetch": "legacy"
+}
