@@ -27,7 +27,9 @@ def quality_cases(config: dict, selection: dict) -> list[dict]:
                 raise ValueError("duplicate residual tuning theta")
             cases.extend({"method": "residual-threshold", "ef": ef,
                           "theta": theta} for theta in thetas)
-        anchor = config["direct_anchor_ef"]
+        anchor = config.get("direct_anchor_ef")
+        if anchor is None:
+            return cases
         if not isinstance(anchor, int) or isinstance(anchor, bool) or anchor <= 0:
             raise ValueError("invalid residual direct anchor ef")
         return cases + [{"method": "residual-direct", "ef": anchor,

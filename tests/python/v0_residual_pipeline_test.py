@@ -188,6 +188,16 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(cases[-1], {"method": "residual-direct", "ef": 600,
                                      "theta": 1.0})
 
+    def test_residual_tuning_supplement_has_only_three_new_cases(self):
+        config = json.loads((Path(__file__).resolve().parents[2] /
+                             "configs/v0/residual_estimator/residual_tuning_supplement_quality_v1.json")
+                            .read_text())
+        self.assertEqual(quality_cases(config, {}), [
+            {"method": "residual-threshold", "ef": 475, "theta": 1.08},
+            {"method": "residual-threshold", "ef": 475, "theta": 1.10},
+            {"method": "residual-threshold", "ef": 500, "theta": 1.04},
+        ])
+
     def test_preliminary_qps_rejects_unmatched_recall(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

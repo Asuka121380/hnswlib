@@ -123,6 +123,23 @@ PY
       --companion "$RESIDUAL_COMPANION" \
       --output "$run_root/residual-tuning-quality"
     ;;
+  D-tune-supplement-quality)
+    : "${RESIDUAL_COMPANION:?set RESIDUAL_COMPANION}"
+    "$RESIDUAL_PYTHON" scripts/v0/performance_ready/check_build_contract.py \
+      --build-dir "$RESIDUAL_REFERENCE_BUILD" --contract residual-quality \
+      --native-arch off
+    if ! "$RESIDUAL_REFERENCE_BUILD/v0_search_runner" --help 2>&1 | \
+        grep -Fq -- '--query-id-file'; then
+      echo "quality runner lacks --query-id-file: $RESIDUAL_REFERENCE_BUILD/v0_search_runner" >&2
+      exit 2
+    fi
+    "$RESIDUAL_PYTHON" "$script/run_active_matrix.py" --stage quality \
+      --config configs/v0/residual_estimator/residual_tuning_supplement_quality_v1.json \
+      --contract "$contract" --selection "$selection" \
+      --runner "$RESIDUAL_REFERENCE_BUILD/v0_search_runner" \
+      --companion "$RESIDUAL_COMPANION" \
+      --output "$run_root/residual-tuning-supplement-quality"
+    ;;
   D-tune-select)
     "$RESIDUAL_PYTHON" "$script/select_residual_tuning.py" \
       --quality "$run_root/residual-tuning-quality/manifest.json" \
