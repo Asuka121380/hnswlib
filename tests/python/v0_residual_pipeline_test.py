@@ -5,18 +5,56 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] /
                        "scripts" / "v0" / "residual_estimator"))
 from common import sha256, write_json  # noqa: E402
+from capture_current_trace import main as capture_current_trace  # noqa: E402
 from encode_sketch import edge_dtype, open_edges  # noqa: E402
 from run_active_matrix import quality_cases  # noqa: E402
 from summarize_active import summarize  # noqa: E402
 
 
 class PipelineTest(unittest.TestCase):
+    def test_current_shadow_loads_index_once_per_ef(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "config.json"
+            contract = root / "contract.json"
+            split = root / "split.json"
+            output = root / "shadow"
+            write_json(config, {"ef_search": [435, 500], "k": 10,
+                                "development_queries": 3})
+            write_json(split, {"development": [1, 4, 7]})
+            write_json(contract, {"config": {"split_seed": 42},
+                                  "split_path": str(split),
+                                  "assets": {key: {"path": key} for key in
+                                             ("dataset_config", "index", "sidecar")}})
+            calls = []
+
+            def fake_run(command, check):
+                self.assertTrue(check)
+                calls.append(command)
+                target = Path(command[command.index("--output-dir") + 1])
+                target.mkdir(parents=True)
+                write_json(target / "summary.json", {"status": "valid"})
+
+            argv = ["capture_current_trace.py", "--config", str(config),
+                    "--contract", str(contract), "--runner", "runner",
+                    "--output", str(output)]
+            with patch("sys.argv", argv), patch(
+                    "capture_current_trace.subprocess.run", side_effect=fake_run):
+                capture_current_trace()
+            self.assertEqual(len(calls), 2)
+            ids = output / "development-query-ids.txt"
+            self.assertEqual(ids.read_text().splitlines(), ["1", "4", "7"])
+            for command in calls:
+                self.assertEqual(command[command.index("--query-id-file") + 1],
+                                 str(ids))
+
     def test_edge_geometry_layout_and_original_code(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "edges.bin"

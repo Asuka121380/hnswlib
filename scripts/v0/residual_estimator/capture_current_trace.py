@@ -8,17 +8,6 @@ from pathlib import Path
 from common import mark_complete, read_json, sha256, write_json
 
 
-def spans(ids: list[int]) -> list[tuple[int, int]]:
-    result = []
-    for query_id in sorted(ids):
-        if result and query_id == result[-1][0] + result[-1][1]:
-            first, length = result[-1]
-            result[-1] = (first, length + 1)
-        else:
-            result.append((query_id, 1))
-    return result
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
@@ -36,26 +25,30 @@ def main() -> None:
     selected = sorted(ordered[:config["development_queries"]])
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
+    query_id_file = output / "development-query-ids.txt"
+    query_id_file.write_text("".join(f"{query_id}\n" for query_id in selected),
+                             encoding="utf-8")
     runs = []
     for ef in config["ef_search"]:
-        for first, count in spans(selected):
-            target = output / f"ef{ef}-q{first}-{first + count - 1}"
-            command = [args.runner, "--dataset-config", assets["dataset_config"]["path"],
-                       "--index-path", assets["index"]["path"],
-                       "--sidecar-path", assets["sidecar"]["path"],
-                       "--output-dir", str(target), "--mode", "shadow",
-                       "--query-start", str(first), "--query-count", str(count),
-                       "--k", str(config["k"]), "--ef-search", str(ef),
-                       "--shadow-sample-modulus", "1",
-                       "--shadow-sample-remainder", "0"]
-            subprocess.run(command, check=True)
-            summary = read_json(target / "summary.json")
-            if summary.get("status") != "valid":
-                raise ValueError(f"invalid shadow run: {target}")
-            runs.append({"ef": ef, "query_start": first, "query_count": count,
-                         "output": str(target.resolve()),
-                         "summary_sha256": sha256(target / "summary.json")})
+        target = output / f"ef{ef}"
+        command = [args.runner, "--dataset-config", assets["dataset_config"]["path"],
+                   "--index-path", assets["index"]["path"],
+                   "--sidecar-path", assets["sidecar"]["path"],
+                   "--output-dir", str(target), "--mode", "shadow",
+                   "--query-id-file", str(query_id_file),
+                   "--k", str(config["k"]), "--ef-search", str(ef),
+                   "--shadow-sample-modulus", "1",
+                   "--shadow-sample-remainder", "0"]
+        subprocess.run(command, check=True)
+        summary = read_json(target / "summary.json")
+        if summary.get("status") != "valid":
+            raise ValueError(f"invalid shadow run: {target}")
+        runs.append({"ef": ef, "query_count": len(selected),
+                     "output": str(target.resolve()),
+                     "summary_sha256": sha256(target / "summary.json")})
     manifest = {"schema_version": 1, "query_ids": selected,
+                "query_id_file": str(query_id_file.resolve()),
+                "query_id_file_sha256": sha256(query_id_file),
                 "stage_sequence_available": False, "runs": runs}
     write_json(output / "manifest.json", manifest)
     mark_complete(output, {"config": sha256(args.config),

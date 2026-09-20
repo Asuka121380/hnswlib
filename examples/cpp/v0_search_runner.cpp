@@ -62,6 +62,7 @@ struct Options {
     std::string producer_git_commit;
     std::string git_branch;
     std::string working_tree_dirty;
+    std::string query_id_file;
     size_t query_start = 0;
     size_t query_count = 0;
     size_t k = 10;
@@ -364,6 +365,7 @@ void printUsage(std::ostream& out) {
         << "  [--run-id <text>]\n"
         << "  [--query-start <non-negative-integer>]\n"
         << "  [--query-count <non-negative-integer; 0 means remaining>]\n"
+        << "  [--query-id-file <one zero-based query ID per line>]\n"
         << "  [--k <positive-integer>]\n"
         << "  [--ef-search <positive-integer>]\n"
         << "  [--shadow-sample-modulus <positive-integer>]\n"
@@ -398,6 +400,8 @@ Options parseOptions(int argc, char** argv) {
             options.query_start = parseSize(value, key);
         } else if (key == "--query-count") {
             options.query_count = parseSize(value, key);
+        } else if (key == "--query-id-file") {
+            options.query_id_file = value;
         } else if (key == "--k") {
             options.k = parseSize(value, key);
         } else if (key == "--ef-search") {
@@ -1078,6 +1082,8 @@ void writeMetadata(
         << "  \"dimension\": " << dataset.dimension << ",\n"
         << "  \"n_base\": " << dataset.n_base << ",\n"
         << "  \"query_start\": " << options.query_start << ",\n"
+        << "  \"query_id_file\": \""
+        << jsonEscape(options.query_id_file) << "\",\n"
         << "  \"query_count\": " << query_count << ",\n"
         << "  \"k\": " << options.k << ",\n"
         << "  \"ef_search\": " << options.ef_search << ",\n"
@@ -1362,15 +1368,50 @@ void run(const Options& options) {
     if (options.query_start > dataset.n_query) {
         throw std::runtime_error("query-start exceeds n_query");
     }
-    const size_t count =
+    const size_t range_count =
         options.query_count == 0 ?
             dataset.n_query - options.query_start :
             options.query_count;
-    if (count > dataset.n_query - options.query_start ||
-        count == 0) {
+    if (range_count > dataset.n_query - options.query_start ||
+        range_count == 0) {
         throw std::runtime_error(
             "Query range is empty or exceeds the dataset");
     }
+    std::vector<size_t> query_ids;
+    if (!options.query_id_file.empty()) {
+        if (options.query_start != 0 || options.query_count != 0) {
+            throw std::runtime_error(
+                "--query-id-file cannot be combined with a query range");
+        }
+        std::ifstream id_input(options.query_id_file.c_str());
+        if (!id_input) {
+            throw std::runtime_error(
+                "Cannot open query ID file: " + options.query_id_file);
+        }
+        std::set<size_t> seen;
+        std::string token;
+        while (id_input >> token) {
+            const size_t id = parseSize(token.c_str(), "--query-id-file");
+            if (id >= dataset.n_query || !seen.insert(id).second) {
+                throw std::runtime_error(
+                    "Query ID out of range or repeated: " + token);
+            }
+            query_ids.push_back(id);
+        }
+        if (id_input.bad() || query_ids.empty()) {
+            throw std::runtime_error("Cannot read nonempty query ID file");
+        }
+    } else {
+        for (size_t id = options.query_start;
+             id < options.query_start + range_count; ++id) {
+            query_ids.push_back(id);
+        }
+    }
+    const size_t count = query_ids.size();
+    const size_t load_start = options.query_id_file.empty() ?
+        options.query_start : 0;
+    const size_t load_count = options.query_id_file.empty() ?
+        count : dataset.n_query;
     makeDirectories(options.output_dir);
     if (fileExists(options.output_dir + "/complete.json")) {
         throw std::runtime_error(
@@ -1381,13 +1422,13 @@ void run(const Options& options) {
         dataset.query_path,
         dataset.query_format,
         dataset.dimension,
-        options.query_start,
-        count);
+        load_start,
+        load_count);
     const std::vector<uint32_t> truth = loadGroundTruth(
         dataset.ground_truth_path,
         dataset.ground_truth_k,
-        options.query_start,
-        count);
+        load_start,
+        load_count);
     for (size_t i = 0; i < truth.size(); ++i) {
         if (truth[i] >= dataset.n_base) {
             throw std::runtime_error(
@@ -1493,10 +1534,11 @@ void run(const Options& options) {
 #endif
 
     for (size_t local = 0; local < count; ++local) {
-        const uint64_t query_id =
-            static_cast<uint64_t>(options.query_start + local);
+        const uint64_t query_id = static_cast<uint64_t>(query_ids[local]);
+        const size_t data_row = options.query_id_file.empty() ?
+            local : query_ids[local];
         const float* query =
-            queries.data() + local * dataset.dimension;
+            queries.data() + data_row * dataset.dimension;
 
         const std::chrono::steady_clock::time_point baseline_start =
             std::chrono::steady_clock::now();
@@ -1589,7 +1631,7 @@ void run(const Options& options) {
                 v0_end - v0_start).count());
         const bool equal = queuesExactlyEqual(baseline, v0);
         const uint32_t* query_truth =
-            truth.data() + local * dataset.ground_truth_k;
+            truth.data() + data_row * dataset.ground_truth_k;
         const double baseline_recall =
             recallAtK(baseline, query_truth, options.k);
         const double v0_recall =
@@ -1731,6 +1773,8 @@ void run(const Options& options) {
         << "{\"status\":\"complete\",\"mode\":\""
         << jsonEscape(options.mode)
         << "\",\"query_start\":" << options.query_start
+        << ",\"query_id_file\":\""
+        << jsonEscape(options.query_id_file) << "\""
         << ",\"query_count\":" << count << "}\n";
     if (!complete) {
         throw std::runtime_error("Cannot write complete.json");
