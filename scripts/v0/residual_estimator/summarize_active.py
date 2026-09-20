@@ -76,10 +76,9 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     qps = read_json(args.qps)
-    if qps.get("selection"):
-        selection = read_json(qps["selection"])
-        if selection.get("source_quality_sha256") != sha256(args.quality):
-            raise ValueError("quality manifest differs from matched-recall selection")
+    matched_cases = read_json(qps["config"])
+    if matched_cases.get("source_quality_sha256") != sha256(args.quality):
+        raise ValueError("quality manifest differs from matched-recall selection")
     output = {"schema_version": 1, "quality_manifest_sha256": sha256(args.quality),
               "qps_manifest_sha256": sha256(args.qps),
               "results": summarize(qps),

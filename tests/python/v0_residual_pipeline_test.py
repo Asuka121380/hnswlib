@@ -17,7 +17,7 @@ from capture_current_trace import main as capture_current_trace  # noqa: E402
 from encode_sketch import edge_dtype, open_edges  # noqa: E402
 from run_active_matrix import quality_cases, main as run_active_matrix  # noqa: E402
 from select_matched_recall import main as select_matched_recall  # noqa: E402
-from summarize_active import summarize  # noqa: E402
+from summarize_active import summarize, main as summarize_active  # noqa: E402
 
 
 class PipelineTest(unittest.TestCase):
@@ -220,6 +220,37 @@ class PipelineTest(unittest.TestCase):
             manifest["runs"].pop()
             with self.assertRaises(ValueError):
                 summarize(manifest)
+
+    def test_qps_summary_checks_matched_config_not_a1_selection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            quality, matched, a1, qps, output = (root / name for name in
+                ("quality.json", "matched.json", "a1.json", "qps.json",
+                 "summary.json"))
+            write_json(quality, {"stage": "quality"})
+            write_json(matched, {"source_quality_sha256": sha256(quality)})
+            write_json(a1, {"selected_bits": [128]})
+            runs = []
+            for block in range(2):
+                for method in ("baseline", "approx-no-retry", "residual-direct"):
+                    result = root / f"{block}-{method}.json"
+                    write_json(result, {"qps": 100.0, "latency_p95_ns": 1000,
+                                        "latency_p99_ns": 1200})
+                    runs.append({"block": block, "case": {
+                        "target_recall": 0.9555, "method": method,
+                        "matched": True}, "result": str(result),
+                        "sha256": sha256(result)})
+            write_json(qps, {"stage": "qps", "config": str(matched),
+                             "selection": str(a1), "runs": runs})
+            argv = ["summarize_active.py", "--quality", str(quality),
+                    "--qps", str(qps), "--output", str(output)]
+            with patch("sys.argv", argv):
+                summarize_active()
+            self.assertEqual(len(json.loads(output.read_text())["results"]), 3)
+            write_json(matched, {"source_quality_sha256": "wrong"})
+            with patch("sys.argv", argv), self.assertRaisesRegex(
+                    ValueError, "quality manifest differs"):
+                summarize_active()
 
 
 if __name__ == "__main__":
