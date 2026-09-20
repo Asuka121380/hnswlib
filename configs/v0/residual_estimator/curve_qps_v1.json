@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "k": 10,
+  "recall_tolerance": 0.001,
+  "quality_query_count": 800,
+  "quality_sources": {
+    "active": "active-quality",
+    "baseline": "curve-baseline-quality",
+    "candidate": "curve-candidate-quality",
+    "refine": "curve-refine-quality",
+    "tuning": "residual-tuning-quality",
+    "supplement": "residual-tuning-supplement-quality"
+  },
+  "anchors": [
+    {
+      "baseline": {"source": "baseline", "method": "baseline", "ef": 350},
+      "candidates": [
+        {"source": "candidate", "method": "approx-no-retry", "ef": 400, "beta": 1.45},
+        {"source": "refine", "method": "residual-direct", "ef": 500, "theta": 1.0},
+        {"source": "candidate", "method": "residual-threshold", "ef": 425, "theta": 1.04}
+      ]
+    },
+    {
+      "baseline": {"source": "active", "method": "baseline", "ef": 405},
+      "candidates": [
+        {"source": "active", "method": "approx-no-retry", "ef": 465, "beta": 1.45},
+        {"source": "active", "method": "residual-direct", "ef": 600, "theta": 1.0},
+        {"source": "supplement", "method": "residual-threshold", "ef": 500, "theta": 1.04}
+      ]
+    },
+    {
+      "baseline": {"source": "active", "method": "baseline", "ef": 435},
+      "candidates": [
+        {"source": "candidate", "method": "approx-no-retry", "ef": 500, "beta": 1.45},
+        {"source": "candidate", "method": "residual-direct", "ef": 650, "theta": 1.0},
+        {"source": "tuning", "method": "residual-threshold", "ef": 500, "theta": 1.08},
+        {"source": "tuning", "method": "residual-threshold", "ef": 575, "theta": 1.04}
+      ]
+    },
+    {
+      "baseline": {"source": "baseline", "method": "baseline", "ef": 500},
+      "candidates": [
+        {"source": "candidate", "method": "approx-no-retry", "ef": 570, "beta": 1.45},
+        {"source": "candidate", "method": "residual-direct", "ef": 750, "theta": 1.0},
+        {"source": "tuning", "method": "residual-threshold", "ef": 500, "theta": 1.14},
+        {"source": "tuning", "method": "residual-threshold", "ef": 525, "theta": 1.12}
+      ]
+    },
+    {
+      "baseline": {"source": "baseline", "method": "baseline", "ef": 600},
+      "candidates": [
+        {"source": "candidate", "method": "approx-no-retry", "ef": 700, "beta": 1.45},
+        {"source": "refine", "method": "residual-direct", "ef": 935, "theta": 1.0},
+        {"source": "refine", "method": "residual-threshold", "ef": 690, "theta": 1.08}
+      ]
+    }
+  ],
+  "require_matched": true,
+  "blocks": 5,
+  "repeats": 5,
+  "warmup_queries": 100,
+  "query_start": 0,
+  "query_count": 1000,
+  "prefetch": "legacy"
+}

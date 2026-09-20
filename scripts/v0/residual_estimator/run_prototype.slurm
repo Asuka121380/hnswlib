@@ -241,6 +241,25 @@ PY
       --qps "$run_root/targeted-qps/manifest.json" \
       --output "$run_root/analysis/targeted-qps-summary.json"
     ;;
+  D-curve-qps)
+    : "${RESIDUAL_COMPANION:?set RESIDUAL_COMPANION}"
+    "$RESIDUAL_PYTHON" "$script/select_curve_qps.py" \
+      --run-root "$run_root" \
+      --config configs/v0/residual_estimator/curve_qps_v1.json \
+      --output "$run_root/curve-qps-cases.json"
+    "$RESIDUAL_PYTHON" scripts/v0/performance_ready/check_build_contract.py \
+      --build-dir "$RESIDUAL_PERFORMANCE_BUILD" \
+      --contract residual-performance --native-arch off
+    "$RESIDUAL_PYTHON" "$script/run_active_matrix.py" --stage qps \
+      --config "$run_root/curve-qps-cases.json" \
+      --contract "$contract" --selection "$selection" \
+      --runner "$RESIDUAL_PERFORMANCE_BUILD/v0_performance_runner" \
+      --companion "$RESIDUAL_COMPANION" \
+      --output "$run_root/curve-qps"
+    "$RESIDUAL_PYTHON" "$script/summarize_curve_qps.py" \
+      --qps "$run_root/curve-qps/manifest.json" \
+      --output "$run_root/analysis/curve-qps-summary.json"
+    ;;
   *) echo "unknown stage: $RESIDUAL_STAGE" >&2; exit 2 ;;
 esac
 printf 'completed stage=%s repo=%s run=%s\n' "$RESIDUAL_STAGE" "$root" "$run_root"

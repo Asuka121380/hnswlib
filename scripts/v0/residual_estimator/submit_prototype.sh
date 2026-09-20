@@ -16,7 +16,7 @@ while (($#)); do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ "$stage" =~ ^(A0|A1|A2|B|C|D-quality|D-match|D-qps|D-tune-quality|D-tune-supplement-quality|D-tune-fine-quality|D-tune-select|D-tune-qps|D-target-qps|D-curve-baseline-quality|D-curve-candidate-quality|D-curve-refine-quality)$ ]] || { echo 'invalid --stage' >&2; exit 2; }
+[[ "$stage" =~ ^(A0|A1|A2|B|C|D-quality|D-match|D-qps|D-tune-quality|D-tune-supplement-quality|D-tune-fine-quality|D-tune-select|D-tune-qps|D-target-qps|D-curve-baseline-quality|D-curve-candidate-quality|D-curve-refine-quality|D-curve-qps)$ ]] || { echo 'invalid --stage' >&2; exit 2; }
 [[ "$profile" == exploratory || "$profile" == exclusive ]] || { echo 'invalid --resource-profile' >&2; exit 2; }
 [[ -n "$partition" && -n "$qos" && -n "$memory" && -n "$time_limit" && -n "$cpus" ]] || {
   echo 'partition, qos, memory, time and cpus are required' >&2; exit 2;
@@ -37,7 +37,7 @@ if [[ "$stage" == D-quality || "$stage" == D-tune-quality || "$stage" == D-tune-
     exit 2
   fi
 fi
-if [[ "$stage" == D-target-qps ]]; then
+if [[ "$stage" == D-target-qps || "$stage" == D-curve-qps ]]; then
   runner="$RESIDUAL_PERFORMANCE_BUILD/v0_performance_runner"
   [[ -x "$runner" ]] || {
     echo "missing executable performance runner: $runner" >&2; exit 2;
