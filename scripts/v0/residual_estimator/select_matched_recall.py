@@ -57,7 +57,7 @@ def main() -> None:
     for target in config["target_recalls"]:
         exact = nearest([p for p in points if p["case"]["method"] == "baseline"], target)
         pq = nearest([p for p in points if p["case"]["method"] == "approx-no-retry"], target)
-        residual = nearest([p for p in points if p["case"]["method"].startswith("residual")], target)
+        residual = nearest([p for p in points if p["case"]["method"] == "residual-direct"], target)
         spread = max(p["recall"] for p in (exact, pq, residual)) - min(
             p["recall"] for p in (exact, pq, residual))
         selected.append({"target_recall": target,

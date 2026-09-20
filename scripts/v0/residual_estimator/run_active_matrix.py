@@ -10,6 +10,23 @@ from common import mark_complete, read_json, sha256, write_json
 
 
 def quality_cases(config: dict, selection: dict) -> list[dict]:
+    if "ef_search_by_method" in config:
+        grid = config["ef_search_by_method"]
+        if set(grid) != {"baseline", "approx-no-retry", "residual-direct"}:
+            raise ValueError("preliminary quality grid requires exactly three methods")
+        for efs in grid.values():
+            if not efs or any(not isinstance(ef, int) or ef <= 0 for ef in efs) \
+                    or len(efs) != len(set(efs)):
+                raise ValueError("invalid method-specific ef grid")
+        betas = config["beta_values"]
+        if len(betas) != 1:
+            raise ValueError("preliminary PQ comparison requires one beta")
+        return ([{"method": "baseline", "ef": ef}
+                 for ef in grid["baseline"]] +
+                [{"method": "approx-no-retry", "ef": ef, "beta": betas[0]}
+                 for ef in grid["approx-no-retry"]] +
+                [{"method": "residual-direct", "ef": ef, "theta": 1.0}
+                 for ef in grid["residual-direct"]])
     cases = []
     for ef in config["ef_search"]:
         cases.append({"method": "baseline", "ef": ef})
@@ -58,6 +75,9 @@ def main() -> None:
         cases = config.get("matched_cases", [])
         if not cases:
             raise ValueError("QPS requires frozen matched_cases from quality selection")
+        if config.get("require_matched") and any(
+                not case.get("matched", False) for case in cases):
+            raise ValueError("QPS requires recall-matched cases")
     with Path(args.companion).open("rb") as source:
         header = source.read(24)
     if len(header) != 24 or header[:8] != b"V0RES001":

@@ -1,7 +1,11 @@
 {
   "schema_version": 1,
   "k": 10,
-  "ef_search": [350, 435, 500, 600],
+  "ef_search_by_method": {
+    "baseline": [395, 405, 415, 425, 435],
+    "approx-no-retry": [450, 465, 480],
+    "residual-direct": [575, 600, 625]
+  },
   "beta_values": [1.45],
   "query_start": 0,
   "query_count": 1000,

@@ -160,6 +160,40 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(sum(case["method"] == "residual-direct"
                              for case in cases), 2)
 
+    def test_preliminary_quality_grid_has_three_methods(self):
+        config = json.loads((Path(__file__).resolve().parents[2] /
+                             "configs/v0/residual_estimator/active_quality_v1.json")
+                            .read_text())
+        cases = quality_cases(config, {})
+        self.assertEqual(len(cases), 11)
+        self.assertEqual([case["method"] for case in cases],
+                         ["baseline"] * 5 + ["approx-no-retry"] * 3 +
+                         ["residual-direct"] * 3)
+        self.assertEqual({case["beta"] for case in cases
+                          if case["method"] == "approx-no-retry"}, {1.45})
+        self.assertTrue(all(case["theta"] == 1.0 for case in cases
+                            if case["method"] == "residual-direct"))
+
+    def test_preliminary_qps_rejects_unmatched_recall(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config, contract, selection = (root / name for name in
+                                           ("config.json", "contract.json",
+                                            "selection.json"))
+            write_json(config, {"matched_cases": [
+                {"method": "residual-direct", "matched": False}],
+                "require_matched": True})
+            write_json(contract, {"assets": {}})
+            write_json(selection, {})
+            argv = ["run_active_matrix.py", "--stage", "qps",
+                    "--config", str(config), "--contract", str(contract),
+                    "--selection", str(selection), "--runner", "runner",
+                    "--companion", str(root / "companion.v0res"),
+                    "--output", str(root / "qps")]
+            with patch("sys.argv", argv), self.assertRaisesRegex(
+                    ValueError, "recall-matched"):
+                run_active_matrix()
+
     def test_paired_summary_and_missing_block(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
