@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "reference": "pq4-packed",
+  "blocks": 5,
+  "repeats": 5,
+  "seed": 20260924,
+  "isa_profile": "portable",
+  "methods": [
+    {"name": "pq4-packed", "artifact": "REPLACE_WITH_PQ4_ARTIFACT"},
+    {"name": "candidate", "artifact": "REPLACE_WITH_CANDIDATE_ARTIFACT"}
+  ]
+}

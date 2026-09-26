@@ -1,0 +1,1 @@
+{"schema_version":1,"representation":{"kind":"rotated_unit_edge"},"codec":{"kind":"opq","nbits":8},"correction":{"kind":"none"},"expected_status":"unavailable_without_faiss_adapter"}

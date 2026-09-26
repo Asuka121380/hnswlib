@@ -1,0 +1,1 @@
+{"schema_version":1,"representation":{"kind":"direct_unit_edge"},"codec":{"kind":"pq_packed","m":64,"nbits":8,"layout":"packed_nbits"},"correction":{"kind":"none"}}

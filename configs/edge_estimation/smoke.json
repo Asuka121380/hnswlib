@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "run_id": "uq-synthetic-smoke",
+  "representation": {"kind": "direct_unit_edge"},
+  "codec": {"kind": "pq_packed", "m": 2, "nbits": 2, "layout": "packed_nbits"},
+  "correction": {"kind": "none"},
+  "policy": {"kind": "scaled_threshold", "alphas": [1.0]},
+  "capture": {"dimension": 8, "k": 10, "ef": 40},
+  "trainer": {"seed": 20260924, "iterations": 4, "sample_cap": 128},
+  "query_lifecycle": {"query": "eager", "source": "lazy_first_eligible"},
+  "timing": {
+    "mode": "ordered_estimator",
+    "batch_policy": "scalar",
+    "blocks": 5,
+    "repeats": 5,
+    "warmup_passes": 1,
+    "thread_count": 1,
+    "isa_profile": "portable"
+  }
+}

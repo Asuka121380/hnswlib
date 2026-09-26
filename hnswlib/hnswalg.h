@@ -13,6 +13,9 @@
 #include "baseline_trace.h"
 #include <chrono>
 #endif
+#ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE
+#include "edge_estimation/observer.h"
+#endif
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
 #include "edge_quant_v0.h"
 #include "edge_quant_v0_io.h"
@@ -528,6 +531,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
 #endif
         ) const {
+#ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE
+        edge_estimation::CaptureObserver* uq_capture_observer =
+            edge_estimation::activeCaptureObserver();
+#endif
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
         if (use_edge_quant_v0 && v0_collect_metrics &&
             v0_metrics == nullptr) {
@@ -567,6 +574,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #ifdef HNSWLIB_ENABLE_V0_APPROX_SHADOW
         uint64_t v0_expansion_index = 0U;
 #endif
+#ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE
+        uint64_t uq_expansion_index = 0U;
+#endif
 
         std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
         std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> candidate_set;
@@ -581,6 +591,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             if (trace != nullptr) ++trace->summary.n_base_entry_distance;
 #else
             dist_t dist = fstdistfunc_(data_point, ep_data, dist_func_param_);
+#endif
+#ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE
+            if (uq_capture_observer != nullptr) {
+                uq_capture_observer->onExactOnly(
+                    0, static_cast<uint32_t>(ep_id),
+                    static_cast<double>(dist));
+            }
 #endif
             lowerBound = dist;
             top_candidates.emplace(dist, ep_id);
@@ -648,6 +665,17 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
             int *data = (int *) get_linklist0(current_node_id);
             size_t size = getListCount((linklistsizeint*)data);
+#ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE
+            const uint64_t uq_current_expansion_index =
+                uq_expansion_index++;
+            if (uq_capture_observer != nullptr) {
+                uq_capture_observer->onSourceBegin(
+                    uq_current_expansion_index,
+                    static_cast<uint32_t>(current_node_id),
+                    static_cast<uint32_t>(size),
+                    static_cast<double>(candidate_dist));
+            }
+#endif
 #ifdef HNSWLIB_ENABLE_V0_APPROX_REAL_PRUNING
             V0FastEdgeRecordSpan v0_fast_edge_span;
             if (v0_approx_config != nullptr
@@ -1000,6 +1028,24 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     }
 #endif
 
+#ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE
+                    if (uq_capture_observer != nullptr) {
+                        const bool uq_threshold_valid =
+                            top_candidates.size() >= ef;
+                        uq_capture_observer->onCandidateBefore(
+                            uq_current_expansion_index,
+                            std::numeric_limits<uint64_t>::max(),
+                            static_cast<uint32_t>(current_node_id),
+                            static_cast<uint32_t>(candidate_id),
+                            static_cast<uint32_t>(j - 1U),
+                            static_cast<uint32_t>(size),
+                            static_cast<double>(candidate_dist),
+                            uq_threshold_valid ?
+                                static_cast<double>(lowerBound) : 0.0,
+                            uq_threshold_valid,
+                            uq_threshold_valid);
+                    }
+#endif
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
                     BaselineDcoRecord trace_record;
                     bool trace_sampled = false;
@@ -1043,6 +1089,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     if (trace != nullptr) trace_record.dist_qd = static_cast<double>(dist);
 #else
                     dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);
+#endif
+#ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE
+                    if (uq_capture_observer != nullptr) {
+                        uq_capture_observer->onCandidateExact(
+                            std::numeric_limits<uint64_t>::max(),
+                            static_cast<double>(dist));
+                    }
 #endif
 
 #if defined(HNSWLIB_ENABLE_EDGE_QUANT_V0) && \
@@ -2169,9 +2222,26 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
         ) const {
         std::priority_queue<std::pair<dist_t, labeltype >> result;
+#ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE
+        edge_estimation::CaptureObserver* uq_capture_observer =
+            edge_estimation::activeCaptureObserver();
+        if (uq_capture_observer != nullptr) {
+            if (use_edge_quant_v0 || isIdAllowed != nullptr ||
+                num_deleted_ != 0U) {
+                throw std::invalid_argument(
+                    "edge-estimation baseline capture requires exact unfiltered search without deletions");
+            }
+            uq_capture_observer->onQueryBegin();
+        }
+#endif
         if (cur_element_count == 0) {
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
             if (trace != nullptr) trace->finalize();
+#endif
+#ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE
+            if (uq_capture_observer != nullptr) {
+                uq_capture_observer->onQueryEnd();
+            }
 #endif
             return result;
         }
@@ -2190,6 +2260,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         if (trace != nullptr) ++trace->summary.n_entry_distance;
 #else
         dist_t curdist = fstdistfunc_(query_data, getDataByInternalId(enterpoint_node_), dist_func_param_);
+#endif
+#ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE
+        if (uq_capture_observer != nullptr) {
+            uq_capture_observer->onExactOnly(
+                maxlevel_, static_cast<uint32_t>(enterpoint_node_),
+                static_cast<double>(curdist));
+        }
 #endif
 
         for (int level = maxlevel_; level > 0; level--) {
@@ -2218,6 +2295,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     if (trace != nullptr) ++trace->summary.n_upper_dist;
 #else
                     dist_t d = fstdistfunc_(query_data, getDataByInternalId(cand), dist_func_param_);
+#endif
+#ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE
+                    if (uq_capture_observer != nullptr) {
+                        uq_capture_observer->onExactOnly(
+                            level, static_cast<uint32_t>(cand),
+                            static_cast<double>(d));
+                    }
 #endif
 
                     if (d < curdist) {
@@ -2334,6 +2418,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         }
 #ifdef HNSWLIB_ENABLE_BASELINE_TRACE
         if (trace != nullptr) trace->finalize();
+#endif
+#ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE
+        if (uq_capture_observer != nullptr) {
+            uq_capture_observer->onQueryEnd();
+        }
 #endif
         return result;
     }

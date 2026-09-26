@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "edge-estimation-config-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "representation", "codec", "correction", "policy"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "dataset_manifest": {"type": "string"},
+    "artifact": {"type": "string"},
+    "representation": {"type": "object", "required": ["kind"]},
+    "codec": {"type": "object", "required": ["kind"]},
+    "correction": {"type": "object", "required": ["kind"]},
+    "policy": {"type": "object", "required": ["kind", "alphas"]},
+    "capture": {"type": "object"},
+    "trainer": {"type": "object"},
+    "query_lifecycle": {"type": "object"},
+    "quality": {"type": "object"},
+    "timing": {"type": "object"}
+  }
+}

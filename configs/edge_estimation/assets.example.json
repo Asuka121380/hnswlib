@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "index": "REPLACE_WITH_FROZEN_INDEX",
+  "base": "REPLACE_WITH_BASE_FVECS",
+  "queries": "REPLACE_WITH_QUERY_FVECS",
+  "ground_truth": "REPLACE_WITH_GROUND_TRUTH",
+  "internal_to_label": "REPLACE_WITH_INTERNAL_TO_LABEL",
+  "pq_sidecar": "REPLACE_WITH_V0_PQ_SIDECAR",
+  "qjl_companion": "REPLACE_WITH_V0_RESIDUAL_COMPANION",
+  "split": "REPLACE_WITH_FROZEN_SPLIT"
+}

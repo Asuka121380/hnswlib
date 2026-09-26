@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "representation": {"kind": "direct_unit_edge"},
+  "codec": {"kind": "pq_packed", "m": 64, "nbits": 4, "layout": "packed4"},
+  "correction": {"kind": "none"}
+}

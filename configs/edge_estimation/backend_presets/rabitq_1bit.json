@@ -1,0 +1,1 @@
+{"schema_version":1,"representation":{"kind":"direct_unit_edge"},"codec":{"kind":"rabitq","nbits":1},"correction":{"kind":"backend_native"},"expected_status":"unavailable_without_rabitq_dependency"}

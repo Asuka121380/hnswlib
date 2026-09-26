@@ -25,6 +25,11 @@ option(HNSWLIB_ENABLE_V0_STRICT_FP_CONTRACT "Apply strict V0 directed-rounding c
 option(HNSWLIB_PERFORMANCE_COMPARABLE_FLAGS "Use identical -O3-class optimization for baseline and V0 performance builds." OFF)
 option(HNSWLIB_ENABLE_NATIVE_ARCH "Compile examples for the build host CPU with -march=native." ON)
 option(HNSWLIB_BUILD_FAISS_PQ_TOOLS "Build Faiss-based offline V0 PQ tools." OFF)
+option(HNSWLIB_BUILD_EDGE_ESTIMATION_TOOLS "Build unified edge-estimation tools and tests." OFF)
+option(HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE "Enable the unified layer-0 capture observer hook." OFF)
+option(UQ_WITH_FAISS "Enable Faiss-backed unified estimators." OFF)
+option(UQ_WITH_RABITQ "Enable the optional RaBitQ adapter." OFF)
+option(UQ_WITH_SAQ "Enable the optional SAQ adapter." OFF)
 set(FAISS_INCLUDE_DIR "" CACHE PATH "Faiss source/install root containing faiss/impl/ProductQuantizer.h")
 set(FAISS_LIBRARY "" CACHE FILEPATH "Path to the Faiss CPU shared/static library")
 
@@ -75,6 +80,10 @@ endif()
 
 if(HNSWLIB_ENABLE_EDGE_QUANT_V0)
     target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_EDGE_QUANT_V0=1)
+endif()
+
+if(HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE)
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE=1)
 endif()
 
 if(HNSWLIB_ENABLE_EDGE_QUANT_V0 AND HNSWLIB_ENABLE_V0_STRICT_FP_CONTRACT)
@@ -471,6 +480,104 @@ if(HNSWLIB_EXAMPLES)
         add_executable(v0_retry_state_test tests/cpp/v0_retry_state_test.cpp)
         target_link_libraries(v0_retry_state_test hnswlib)
         add_test(NAME v0_retry_state_test COMMAND v0_retry_state_test)
+      endif()
+    endif()
+
+    if(HNSWLIB_BUILD_EDGE_ESTIMATION_TOOLS)
+      add_executable(uq_native_runner tools/edge_estimation/native_runner.cpp)
+      target_link_libraries(uq_native_runner hnswlib)
+      set_property(TARGET uq_native_runner PROPERTY CXX_STANDARD 17)
+      set_property(TARGET uq_native_runner PROPERTY CXX_STANDARD_REQUIRED ON)
+
+      add_executable(uq_event_format_test tests/cpp/uq_event_format_test.cpp)
+      target_link_libraries(uq_event_format_test hnswlib)
+      set_property(TARGET uq_event_format_test PROPERTY CXX_STANDARD 17)
+      set_property(TARGET uq_event_format_test PROPERTY CXX_STANDARD_REQUIRED ON)
+      add_test(NAME uq_event_format_test COMMAND uq_event_format_test)
+
+      add_executable(uq_packed_pq_test tests/cpp/uq_packed_pq_test.cpp)
+      target_link_libraries(uq_packed_pq_test hnswlib)
+      set_property(TARGET uq_packed_pq_test PROPERTY CXX_STANDARD 17)
+      set_property(TARGET uq_packed_pq_test PROPERTY CXX_STANDARD_REQUIRED ON)
+      add_test(NAME uq_packed_pq_test COMMAND uq_packed_pq_test)
+
+      add_executable(uq_policy_test tests/cpp/uq_policy_test.cpp)
+      target_link_libraries(uq_policy_test hnswlib)
+      set_property(TARGET uq_policy_test PROPERTY CXX_STANDARD 17)
+      set_property(TARGET uq_policy_test PROPERTY CXX_STANDARD_REQUIRED ON)
+      add_test(NAME uq_policy_test COMMAND uq_policy_test)
+
+      add_executable(uq_evaluator_test tests/cpp/uq_evaluator_test.cpp)
+      target_link_libraries(uq_evaluator_test hnswlib)
+      set_property(TARGET uq_evaluator_test PROPERTY CXX_STANDARD 17)
+      set_property(TARGET uq_evaluator_test PROPERTY CXX_STANDARD_REQUIRED ON)
+      add_test(NAME uq_evaluator_test COMMAND uq_evaluator_test)
+
+      add_executable(uq_artifact_contract_test tests/cpp/uq_artifact_contract_test.cpp)
+      target_link_libraries(uq_artifact_contract_test hnswlib)
+      set_property(TARGET uq_artifact_contract_test PROPERTY CXX_STANDARD 17)
+      set_property(TARGET uq_artifact_contract_test PROPERTY CXX_STANDARD_REQUIRED ON)
+      add_test(NAME uq_artifact_contract_test COMMAND uq_artifact_contract_test)
+
+      add_executable(uq_backend_capability_test tests/cpp/uq_backend_capability_test.cpp)
+      target_link_libraries(uq_backend_capability_test hnswlib)
+      set_property(TARGET uq_backend_capability_test PROPERTY CXX_STANDARD 17)
+      set_property(TARGET uq_backend_capability_test PROPERTY CXX_STANDARD_REQUIRED ON)
+      add_test(NAME uq_backend_capability_test COMMAND uq_backend_capability_test)
+
+      if(HNSWLIB_ENABLE_EDGE_QUANT_V0 AND HNSWLIB_ENABLE_V0_RESIDUAL_ESTIMATOR)
+        add_executable(uq_legacy_adapter_compile_test tests/cpp/uq_legacy_adapter_compile_test.cpp)
+        target_link_libraries(uq_legacy_adapter_compile_test hnswlib)
+        set_property(TARGET uq_legacy_adapter_compile_test PROPERTY CXX_STANDARD 17)
+        set_property(TARGET uq_legacy_adapter_compile_test PROPERTY CXX_STANDARD_REQUIRED ON)
+        add_test(NAME uq_legacy_adapter_compile_test COMMAND uq_legacy_adapter_compile_test)
+      endif()
+
+      if(HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE AND HNSWLIB_ENABLE_EDGE_QUANT_V0)
+        add_executable(uq_capture tools/edge_estimation/capture_runner.cpp)
+        target_link_libraries(uq_capture hnswlib)
+        set_property(TARGET uq_capture PROPERTY CXX_STANDARD 17)
+        set_property(TARGET uq_capture PROPERTY CXX_STANDARD_REQUIRED ON)
+        add_executable(uq_capture_transparency_test tests/cpp/uq_capture_transparency_test.cpp)
+        target_link_libraries(uq_capture_transparency_test hnswlib)
+        set_property(TARGET uq_capture_transparency_test PROPERTY CXX_STANDARD 17)
+        set_property(TARGET uq_capture_transparency_test PROPERTY CXX_STANDARD_REQUIRED ON)
+        add_test(NAME uq_capture_transparency_test COMMAND uq_capture_transparency_test)
+        add_executable(uq_capture_fixture tests/cpp/uq_capture_fixture.cpp)
+        target_link_libraries(uq_capture_fixture hnswlib)
+        set_property(TARGET uq_capture_fixture PROPERTY CXX_STANDARD 17)
+        set_property(TARGET uq_capture_fixture PROPERTY CXX_STANDARD_REQUIRED ON)
+        if(PYTHON_EXECUTABLE)
+          add_test(
+            NAME uq_end_to_end_fixture
+            COMMAND ${PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/python/uq_end_to_end_fixture.py
+                    --fixture $<TARGET_FILE:uq_capture_fixture>
+                    --capture $<TARGET_FILE:uq_capture>
+                    --runner $<TARGET_FILE:uq_native_runner>
+                    --train-script ${CMAKE_CURRENT_SOURCE_DIR}/scripts/edge_estimation/train_encode.py
+                    --run-script ${CMAKE_CURRENT_SOURCE_DIR}/scripts/edge_estimation/run.py
+                    --python ${PYTHON_EXECUTABLE}
+          )
+          set_tests_properties(
+            uq_end_to_end_fixture
+            PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+          )
+        endif()
+      endif()
+
+      if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        foreach(uq_target uq_native_runner uq_event_format_test uq_packed_pq_test uq_policy_test uq_evaluator_test uq_artifact_contract_test uq_backend_capability_test)
+          target_compile_options(${uq_target} PRIVATE -std=c++17)
+        endforeach()
+        if(TARGET uq_capture_transparency_test)
+          target_compile_options(uq_capture PRIVATE -std=c++17)
+          target_compile_options(uq_capture_transparency_test PRIVATE -std=c++17)
+          target_compile_options(uq_capture_fixture PRIVATE -std=c++17)
+        endif()
+        if(TARGET uq_legacy_adapter_compile_test)
+          target_compile_options(uq_legacy_adapter_compile_test PRIVATE -std=c++17)
+        endif()
       endif()
     endif()
 endif()
