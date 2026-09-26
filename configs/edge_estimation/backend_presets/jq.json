@@ -1,1 +1,1 @@
-{"schema_version":1,"representation":{"kind":"rotated_unit_edge"},"codec":{"kind":"jq"},"correction":{"kind":"none"},"expected_status":"unavailable_without_jq_source"}
+{"schema_version":1,"representation":{"kind":"rotated_unit_edge"},"codec":{"kind":"jq","m":32,"nbits":8,"layout":"packed_nbits"},"correction":{"kind":"none"},"trainer":{"provider":"behavioral_port","rotation_seed":1234,"initializer_seed":42}}

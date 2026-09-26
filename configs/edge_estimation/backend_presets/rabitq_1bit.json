@@ -1,1 +1,1 @@
-{"schema_version":1,"representation":{"kind":"direct_unit_edge"},"codec":{"kind":"rabitq","nbits":1},"correction":{"kind":"backend_native"},"expected_status":"unavailable_without_rabitq_dependency"}
+{"schema_version":1,"representation":{"kind":"rotated_unit_edge"},"codec":{"kind":"rabitq","nbits":1,"query_bits":0,"centroid":"zero"},"correction":{"kind":"faiss_native_factors"},"trainer":{"provider":"faiss","threads":1,"rotation_seed":1234}}

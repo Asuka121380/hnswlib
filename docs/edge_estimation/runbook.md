@@ -1,57 +1,66 @@
-# Unified edge-estimation runbook
+# Six-method edge-estimation runbook
 
-Configure the portable tool build:
+## Meaning of “locally complete”
 
-```powershell
-cmake -S . -B build-uq -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DHNSWLIB_BUILD_EDGE_ESTIMATION_TOOLS=ON -DHNSWLIB_ENABLE_NATIVE_ARCH=OFF
-cmake --build build-uq --target uq_native_runner
-ctest --test-dir build-uq --output-on-failure -R uq_
-python -m unittest discover -s tests/python -p "uq_*_test.py"
-```
+Local completion means the six formal configurations have executable trainer/exporter/native
+paths, synthetic correctness evidence, frozen configuration files, failure-path checks, and no
+known code placeholder in their static evaluator path. It does **not** mean their GIST1M quality,
+speed, or Recall-QPS ranking is known. Those conclusions require cluster stages C1 and C2.
 
-The capture-enabled build additionally registers `uq_end_to_end_fixture`. It
-creates a persisted synthetic index and exercises catalog, real capture,
-full-graph packed-PQ train/encode, artifact/hash validation, quality and timing.
-
-Capture requires a separate diagnostic build with
-`HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE=ON` and graph access enabled. Synthetic
-mode is reserved for transparency/smoke tests and marks its output
-`formal_result_eligible=false`. Real mode requires explicit frozen paths and an
-original-query-ID file; it never discovers assets by filename.
+Use the dedicated Faiss environment for training and the capture-enabled C++ build for native
+validation. All commands below create new output directories and refuse to overwrite existing
+results.
 
 ```powershell
-build-uq-capture/uq_capture --synthetic RUN/dataset
-build-uq/uq_native_runner validate RUN/dataset/events.bin RUN/dataset/labels.bin RUN/dataset/query_ranges.bin
-python scripts/edge_estimation/run.py validate --events RUN/dataset/events.bin --labels RUN/dataset/labels.bin --ranges RUN/dataset/query_ranges.bin --out RUN/validation
+$repo = 'PATH_TO_REPOSITORY'
+$py = 'PATH_TO_FAISS_PYTHON'
+$capture = "$repo/build-uq-capture/uq_capture.exe"
+$runner = "$repo/build-uq-capture/uq_native_runner.exe"
+$assets = 'PATH_TO_ASSETS_JSON'
+$oldSplit = 'PATH_TO_FROZEN_OLD_SPLIT_JSON'
+$run = 'PATH_TO_NEW_RUN_DIRECTORY'
+
+Set-Location $repo
+& $py scripts/edge_estimation/run.py convert-split --input $oldSplit --query-count 1000 --out "$run/split"
+& $py scripts/edge_estimation/run.py preflight --assets $assets --config configs/edge_estimation/methods/pq8.json --stage formal --hash-assets --out "$run/preflight"
+& $py scripts/edge_estimation/run.py catalog --assets $assets --dimension 960 --runner $capture --out "$run/catalog"
+& $py scripts/edge_estimation/run.py capture --assets $assets --config configs/edge_estimation/methods/pq8.json --split "$run/split/split.json" --split-name development --runner $capture --out "$run/development"
+& $py scripts/edge_estimation/run.py validate --events "$run/development/events.bin" --labels "$run/development/labels.bin" --ranges "$run/development/query_ranges.bin" --out "$run/dataset-validation"
 ```
 
-Real capture:
+For each name in `pq8,pq4,opq,prq,jq,rabitq`, run:
 
 ```powershell
-build-uq-capture/uq_capture --index INDEX --queries QUERIES.fvecs --query-ids query_ids.txt --dimension 960 --k 10 --ef 100 --out RUN/dataset
-python scripts/edge_estimation/run.py capture --assets assets.json --config config.json --split split.json --split-name development --runner build-uq-capture/uq_capture --out RUN/dataset
+& $py scripts/edge_estimation/run.py train-encode --trainer-python $py --assets $assets --config "configs/edge_estimation/methods/$name.json" --catalog "$run/catalog" --out "$run/artifact-$name"
+& $py scripts/edge_estimation/run.py validate --runner $runner --events "$run/development/events.bin" --queries 'PATH_TO_QUERIES_FVECS' --artifact "$run/artifact-$name" --out "$run/validation-$name"
+& $py scripts/edge_estimation/run.py quality --runner $runner --events "$run/development/events.bin" --labels "$run/development/labels.bin" --queries 'PATH_TO_QUERIES_FVECS' --artifact "$run/artifact-$name" --alpha 0.8 --alpha 0.9 --alpha 1.0 --alpha 1.1 --out "$run/quality-$name"
+& $py scripts/edge_estimation/run.py bench --runner $runner --events "$run/development/events.bin" --queries 'PATH_TO_QUERIES_FVECS' --artifact "$run/artifact-$name" --validation "$run/validation-$name/validation.json" --quality-report "$run/quality-$name/quality.json" --formal --repeats 5 --out "$run/timing-$name"
 ```
 
-Catalog, artifact and native validation:
+The formal assets JSON should contain path strings plus an `expected_sha256` object for `index`,
+`queries`, `base`, `internal_to_label`, and `ground_truth`. A computed hash with no expected value
+is recorded but is not evidence that the asset matches the frozen experiment identity.
+
+## Legacy baseline wrapping
+
+When the historical sidecar exists, wrap it without changing its bytes:
 
 ```powershell
-python scripts/edge_estimation/run.py catalog --assets assets.json --dimension 960 --runner build-uq-capture/uq_capture --out RUN/catalog --ledger RUN/ledger.jsonl
-python scripts/edge_estimation/run.py train-encode --config config.json --assets assets.json --catalog RUN/catalog --out RUN/artifact --ledger RUN/ledger.jsonl
-python scripts/edge_estimation/run.py validate --events RUN/dataset/events.bin --artifact RUN/artifact --queries DATA/queries.fvecs --runner build-uq/uq_native_runner --out RUN/validation --ledger RUN/ledger.jsonl
-python scripts/edge_estimation/run.py quality --events RUN/dataset/events.bin --labels RUN/dataset/labels.bin --artifact RUN/artifact --queries DATA/queries.fvecs --runner build-uq/uq_native_runner --alpha 1.0 --out RUN/quality --ledger RUN/ledger.jsonl
+& $py scripts/edge_estimation/run.py wrap-legacy --sidecar 'PATH_TO_M32B8_SIDECAR' --catalog "$run/catalog" --out "$run/artifact-legacy-pq"
+& $py scripts/edge_estimation/run.py wrap-legacy --sidecar 'PATH_TO_M32B8_SIDECAR' --residual 'PATH_TO_QJL_COMPANION' --catalog "$run/catalog" --out "$run/artifact-legacy-pq-qjl"
 ```
 
-For formal asset identity, run preflight with `--hash-assets`; without it the
-audit deliberately sets `formal_asset_identity_complete=false`. A paired timing
-matrix contains `methods` entries with unique `name` and frozen `artifact`, plus
-`reference`, `blocks`, `repeats`, `seed` and `isa_profile`, and is passed with
-`bench --matrix MATRIX --events ... --queries ... --runner ...`.
+Then use the same validate/quality/bench commands. The loader checks internal sidecar checksums,
+wrapper file hashes, catalog identity, edge count, source/slot identity, and companion identity.
 
-`uq_native_runner capabilities` is the native source of truth. OPQ/PRQ/JQ/
-RaBitQ/SAQ report a concrete unavailable reason until their dependencies and
-adapters are compiled. This is an expected capability result, not a failed PQ
-smoke test.
+## Cluster sequence
 
-Formal GIST runs must first replace every placeholder in `assets.example.json`,
-freeze a split, validate hashes, build full-graph artifacts, and use a clean
-commit. Do not publish synthetic, subset, or legacy sparse timing as QPS.
+1. Rebuild the exact source revision and run the complete local fixture suite on Linux.
+2. Verify all formal asset hashes and their semantic relationship before encoding.
+3. Run a small development capture and legacy parity first.
+4. Encode all six full-graph artifacts once, then run quality and randomized paired static timing.
+5. Select Q* only from C1 evidence. Run IVF+PQ, IVF+Q*, and PQ+QJL+theta as active HNSW searches
+   in C2 and compare Recall@10/QPS on held-out queries.
+
+Static replay cannot establish end-to-end Recall or QPS, and local Windows timings must not be
+ratioed against Linux cluster timings.

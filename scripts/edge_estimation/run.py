@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,13 +15,13 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from scripts.edge_estimation.contracts import (
         append_ledger, atomic_output_dir, file_entry, load_strict_json, read_events,
-        read_labels, read_query_ranges, sha256_file, validate_dataset,
+        read_labels, read_query_ranges, sha256_file, validate_config_v1, validate_dataset,
     )
     from scripts.edge_estimation.capabilities import environment_capabilities
 else:
     from .contracts import (
         append_ledger, atomic_output_dir, file_entry, load_strict_json, read_events,
-        read_labels, read_query_ranges, sha256_file, validate_dataset,
+        read_labels, read_query_ranges, sha256_file, validate_config_v1, validate_dataset,
     )
     from .capabilities import environment_capabilities
 
@@ -46,32 +47,88 @@ def _require_keys(value: Mapping[str, Any], keys: Sequence[str], name: str) -> N
         raise ValueError(f"{name} missing required keys: {', '.join(missing)}")
 
 
+STAGE_ASSETS = {
+    "generic": ("index", "queries"),
+    "catalog": ("index",),
+    "capture": ("index", "queries"),
+    "train": ("base", "internal_to_label"),
+    "quality": ("queries",),
+    "formal": ("index", "queries", "base", "internal_to_label", "ground_truth"),
+}
+
+
+def _asset_path_and_expected(name: str, value: Any,
+                             expected: Mapping[str, Any]) -> tuple[Path, str | None]:
+    expected_hash = expected.get(name)
+    if isinstance(value, str):
+        raw_path = value
+    elif isinstance(value, Mapping):
+        raw_path = value.get("path")
+        expected_hash = value.get("sha256", expected_hash)
+    else:
+        raise ValueError(f"asset {name} must be a path string or path/sha256 object")
+    if not isinstance(raw_path, str) or not raw_path:
+        raise ValueError(f"asset {name} has no path")
+    if expected_hash is not None and (not isinstance(expected_hash, str) or
+                                      len(expected_hash) != 64):
+        raise ValueError(f"asset {name} expected sha256 must be 64 hex characters")
+    return Path(raw_path).expanduser().resolve(), expected_hash
+
+
 def preflight(args: argparse.Namespace) -> int:
     assets = load_strict_json(args.assets)
     config = load_strict_json(args.config)
-    _require_keys(assets, ["schema_version", "index", "queries"], "assets")
-    _require_keys(config, ["schema_version", "representation", "codec",
-                           "correction", "policy"], "config")
+    validate_config_v1(config)
+    _require_keys(assets, ["schema_version"], "assets")
     if assets["schema_version"] != 1 or config["schema_version"] != 1:
         raise ValueError("only schema_version=1 is supported")
+    required_assets = STAGE_ASSETS[args.stage]
+    missing_keys = [key for key in required_assets if key not in assets]
+    expected = assets.get("expected_sha256", {})
+    if not isinstance(expected, Mapping):
+        raise ValueError("assets.expected_sha256 must be an object")
     asset_status: dict[str, object] = {}
     for key, raw_path in assets.items():
-        if key == "schema_version":
+        if key in ("schema_version", "expected_sha256"):
             continue
-        if not isinstance(raw_path, str):
-            raise ValueError(f"asset path {key} must be a string")
-        path = Path(raw_path).expanduser().resolve()
+        path, expected_hash = _asset_path_and_expected(key, raw_path, expected)
         asset_status[key] = {"path": str(path), "exists": path.is_file(),
                              "size": path.stat().st_size if path.is_file() else None}
-        if args.hash_assets and path.is_file():
-            asset_status[key]["sha256"] = sha256_file(path)
-    missing = [key for key, value in asset_status.items() if not value["exists"]]
+        if expected_hash is not None:
+            asset_status[key]["expected_sha256"] = expected_hash.lower()
+        if (args.hash_assets or expected_hash is not None) and path.is_file():
+            actual_hash = sha256_file(path)
+            asset_status[key]["sha256"] = actual_hash
+            asset_status[key]["identity_match"] = (
+                expected_hash is None or actual_hash == expected_hash.lower())
+    missing = missing_keys + [key for key in required_assets
+                              if key in asset_status and not asset_status[key]["exists"]]
+    mismatched = [key for key, value in asset_status.items()
+                  if value.get("identity_match") is False]
+    unfrozen = ([key for key in required_assets
+                 if key in asset_status and "expected_sha256" not in asset_status[key]]
+                if args.stage == "formal" else [])
+    if missing:
+        status = "blocked_missing_assets"
+    elif mismatched:
+        status = "blocked_identity_mismatch"
+    elif unfrozen:
+        status = "blocked_missing_expected_identity"
+    else:
+        status = "ready"
     report = {
         "schema_version": 1,
         "stage": "preflight",
-        "status": "blocked_missing_assets" if missing else "ready",
+        "requested_stage": args.stage,
+        "required_assets": list(required_assets),
+        "status": status,
         "missing_assets": missing,
-        "formal_asset_identity_complete": not missing and args.hash_assets,
+        "identity_mismatches": mismatched,
+        "missing_expected_identities": unfrozen,
+        "formal_asset_identity_complete": (
+            args.stage == "formal" and not missing and not mismatched and not unfrozen and
+            all(asset_status[key].get("identity_match") is True
+                for key in required_assets)),
         "assets": asset_status,
         "environment": {"python": sys.version, "platform": platform.platform(),
                         "cpu_count": os.cpu_count(),
@@ -83,7 +140,108 @@ def preflight(args: argparse.Namespace) -> int:
         _write_json(report_path, report)
         _complete(partial, "preflight", [report_path])
     print(json.dumps({"status": report["status"], "out": str(Path(args.out).resolve())}))
-    return 0 if not missing else 3
+    return 0 if status == "ready" else 3
+
+
+def convert_split(args: argparse.Namespace) -> int:
+    source = load_strict_json(args.input)
+    raw_splits = source.get("splits", source)
+    if not isinstance(raw_splits, Mapping):
+        raise ValueError("split input must be an object or contain a splits object")
+    names = ("development", "selection", "audit")
+    converted: dict[str, list[int]] = {}
+    seen: set[int] = set()
+    for name in names:
+        values = raw_splits.get(name)
+        if (not isinstance(values, list) or not values or
+                not all(isinstance(value, int) and not isinstance(value, bool)
+                        for value in values)):
+            raise ValueError(f"split {name} must be a non-empty integer list")
+        if len(set(values)) != len(values):
+            raise ValueError(f"split {name} contains duplicate query IDs")
+        overlap = seen.intersection(values)
+        if overlap:
+            raise ValueError(f"split {name} overlaps an earlier split")
+        if any(value < 0 or value >= args.query_count for value in values):
+            raise ValueError(f"split {name} contains an out-of-range query ID")
+        converted[name] = list(values)
+        seen.update(values)
+    expected = set(range(args.query_count))
+    if seen != expected:
+        raise ValueError("split groups must cover every query ID exactly once")
+    result = {
+        "schema_version": 1,
+        "source": {"path": str(Path(args.input).resolve()),
+                   "sha256": sha256_file(args.input)},
+        "query_count": args.query_count,
+        "split_counts": {name: len(converted[name]) for name in names},
+        "splits": converted,
+    }
+    with atomic_output_dir(args.out) as partial:
+        result_path = partial / "split.json"
+        _write_json(result_path, result)
+        _complete(partial, "convert-split", [result_path])
+    print(json.dumps({"query_count": args.query_count,
+                      "split_counts": result["split_counts"]}))
+    return 0
+
+
+def wrap_legacy(args: argparse.Namespace) -> int:
+    catalog = load_strict_json(Path(args.catalog) / "manifest.json")
+    _require_keys(catalog, ["identity_sha256", "edge_count"],
+                  "catalog manifest")
+    sidecar_source = Path(args.sidecar).resolve()
+    residual_source = Path(args.residual).resolve() if args.residual else None
+    if not sidecar_source.is_file() or (residual_source and not residual_source.is_file()):
+        raise FileNotFoundError("legacy sidecar or residual companion is missing")
+    backend = "pq_qjl_legacy" if residual_source else "pq_legacy"
+    artifact_format = ("uq-pq-qjl-legacy/1" if residual_source else
+                       "uq-pq-legacy/1")
+    with atomic_output_dir(args.out) as partial:
+        payload = partial / "legacy"
+        payload.mkdir()
+        sidecar = payload / "sidecar.bin"
+        shutil.copyfile(sidecar_source, sidecar)
+        lines = [
+            f"format={artifact_format}", f"backend={backend}",
+            "coverage=full_graph", f"edge_count={int(catalog['edge_count'])}",
+            f"catalog_identity={catalog['identity_sha256']}",
+            "sidecar=legacy/sidecar.bin", f"sidecar_sha256={sha256_file(sidecar)}",
+        ]
+        files = {"sidecar": _artifact_file_entry(sidecar, "legacy/sidecar.bin")}
+        if residual_source:
+            residual = payload / "residual.bin"
+            shutil.copyfile(residual_source, residual)
+            lines.extend(["residual=legacy/residual.bin",
+                          f"residual_sha256={sha256_file(residual)}"])
+            files["residual"] = _artifact_file_entry(residual, "legacy/residual.bin")
+        native = partial / "native.cfg"
+        native.write_text("\n".join(lines) + "\n", encoding="ascii")
+        files["native_config"] = _artifact_file_entry(native, "native.cfg")
+        manifest = partial / "manifest.json"
+        _write_json(manifest, {
+            "schema_version": 1, "format_family": artifact_format.rsplit("/", 1)[0],
+            "format_version": 1, "algorithm": backend, "provider": "legacy_v0",
+            "edge_catalog_identity": catalog["identity_sha256"],
+            "edge_count": int(catalog["edge_count"]), "coverage": "full_graph",
+            "source_identities": {
+                "sidecar": {"path": str(sidecar_source),
+                            "sha256": sha256_file(sidecar_source)},
+                **({"residual": {"path": str(residual_source),
+                                  "sha256": sha256_file(residual_source)}}
+                   if residual_source else {}),
+            },
+            "files": files,
+        })
+        files["manifest"] = _artifact_file_entry(manifest, "manifest.json")
+        _complete(partial, "wrap-legacy", [sidecar, native, manifest] +
+                  ([partial / "legacy" / "residual.bin"] if residual_source else []))
+    print(json.dumps({"backend": backend, "out": str(Path(args.out).resolve())}))
+    return 0
+
+
+def _artifact_file_entry(path: Path, relative: str) -> dict[str, Any]:
+    return {**file_entry(path), "path": relative}
 
 
 def validate(args: argparse.Namespace) -> int:
@@ -95,6 +253,12 @@ def validate(args: argparse.Namespace) -> int:
                    str(Path(args.queries).resolve())]
         report = json.loads(subprocess.run(command, check=True, text=True,
                                            capture_output=True).stdout)
+        report["input_identities"] = {
+            "events_sha256": sha256_file(args.events),
+            "queries_sha256": sha256_file(args.queries),
+            "artifact_manifest_sha256": sha256_file(Path(args.artifact) / "manifest.json"),
+            "artifact_native_cfg_sha256": sha256_file(Path(args.artifact) / "native.cfg"),
+        }
         with atomic_output_dir(args.out) as partial:
             report_path = partial / "validation.json"
             _write_json(report_path, report)
@@ -112,13 +276,54 @@ def validate(args: argparse.Namespace) -> int:
     validate_dataset(events, labels, ranges)
     report = {"schema_version": 1, "valid": True,
               "event_count": len(events), "label_count": len(labels),
-              "query_count": len(ranges), "dimension": event_header.dimension}
+              "query_count": len(ranges), "dimension": event_header.dimension,
+              "input_identities": {
+                  "events_sha256": sha256_file(args.events),
+                  "labels_sha256": sha256_file(args.labels),
+                  "ranges_sha256": sha256_file(args.ranges),
+              }}
     with atomic_output_dir(args.out) as partial:
         report_path = partial / "validation.json"
         _write_json(report_path, report)
         _complete(partial, "validate", [report_path])
     print(json.dumps(report))
     return 0
+
+
+def _timing_evidence(validation_path: str | None, quality_path: str | None,
+                     events: str, queries: str | None, artifact: str | None,
+                     formal: bool) -> dict[str, Any]:
+    validation_evidence = quality_evidence = None
+    expected = {"events_sha256": sha256_file(events)}
+    if queries:
+        expected["queries_sha256"] = sha256_file(queries)
+    if artifact:
+        expected["artifact_manifest_sha256"] = sha256_file(
+            Path(artifact) / "manifest.json")
+        expected["artifact_native_cfg_sha256"] = sha256_file(
+            Path(artifact) / "native.cfg")
+    if validation_path:
+        validation_value = load_strict_json(validation_path)
+        if validation_value.get("valid") is not True:
+            raise ValueError("validation evidence is not a passing artifact validation")
+        identities = validation_value.get("input_identities", {})
+        if any(identities.get(key) != value for key, value in expected.items()):
+            raise ValueError("validation evidence identity does not match timing inputs")
+        validation_evidence = {"path": str(Path(validation_path).resolve()),
+                               "sha256": sha256_file(validation_path)}
+    if quality_path:
+        quality_value = load_strict_json(quality_path)
+        if not isinstance(quality_value.get("summaries"), list) or not quality_value["summaries"]:
+            raise ValueError("quality evidence has no summaries")
+        identities = quality_value.get("input_identities", {})
+        if any(identities.get(key) != value for key, value in expected.items()):
+            raise ValueError("quality evidence identity does not match timing inputs")
+        quality_evidence = {"path": str(Path(quality_path).resolve()),
+                            "sha256": sha256_file(quality_path)}
+    if formal and (validation_evidence is None or quality_evidence is None):
+        raise ValueError("formal timing requires --validation and --quality-report")
+    return {"validation": validation_evidence, "quality": quality_evidence,
+            "formal_admitted": bool(formal), "verified_inputs": expected}
 
 
 def bench(args: argparse.Namespace) -> int:
@@ -133,6 +338,12 @@ def bench(args: argparse.Namespace) -> int:
         names = [str(item["name"]) for item in methods]
         artifacts = {str(item["name"]): str(Path(item["artifact"]).resolve())
                      for item in methods}
+        method_evidence = {
+            str(item["name"]): _timing_evidence(
+                item.get("validation"), item.get("quality_report"), args.events,
+                args.queries, str(Path(item["artifact"]).resolve()), args.formal)
+            for item in methods
+        }
         blocks = int(matrix.get("blocks", 5))
         repeats = int(matrix.get("repeats", 5))
         seed = int(matrix.get("seed", 20260924))
@@ -141,7 +352,7 @@ def bench(args: argparse.Namespace) -> int:
         build_id = sha256_file(args.runner)
         records = []
         for slot in paired_schedule(names, blocks, repeats, seed):
-            command = [str(Path(args.runner).resolve()), "bench-pq",
+            command = [str(Path(args.runner).resolve()), "bench-artifact",
                        str(Path(args.events).resolve()), artifacts[str(slot["method"])],
                        str(Path(args.queries).resolve()), "1"]
             value = json.loads(subprocess.run(command, check=True, text=True,
@@ -153,10 +364,16 @@ def bench(args: argparse.Namespace) -> int:
                             "mode": value["mode"], "thread_count": 1,
                             "isa_profile": matrix.get("isa_profile", "portable"),
                             "checksum": value["checksum"],
-                            "memory_report": value["memory_report"]})
+                            "memory_report": value["memory_report"],
+                            "evidence": method_evidence[str(slot["method"])]})
         result = {"schema_version": 1, "mode": "randomized_paired_blocks",
                   "raw_records": records,
-                  "summary": summarize_paired(records, reference)}
+                  "summary": summarize_paired(records, reference),
+                  "evidence": {"by_method": method_evidence,
+                               "formal_admitted": bool(args.formal)},
+                  "input_identities": {"events_sha256": dataset_id,
+                                       "runner_sha256": build_id,
+                                       "queries_sha256": sha256_file(args.queries)}}
         with atomic_output_dir(args.out) as partial:
             result_path = partial / "result.json"
             _write_json(result_path, result)
@@ -166,7 +383,7 @@ def bench(args: argparse.Namespace) -> int:
     if args.artifact:
         if not args.queries:
             raise ValueError("artifact benchmark requires --queries")
-        command = [str(Path(args.runner).resolve()), "bench-pq",
+        command = [str(Path(args.runner).resolve()), "bench-artifact",
                    str(Path(args.events).resolve()), str(Path(args.artifact).resolve()),
                    str(Path(args.queries).resolve()), str(args.repeats)]
     else:
@@ -175,6 +392,17 @@ def bench(args: argparse.Namespace) -> int:
     completed = subprocess.run(command, check=True, text=True,
                                capture_output=True)
     result = json.loads(completed.stdout)
+    evidence = _timing_evidence(
+        args.validation, args.quality_report, args.events, args.queries,
+        args.artifact, args.formal)
+    result["evidence"] = evidence
+    result["quality_valid"] = evidence["quality"] is not None
+    result["formal_validation_passed"] = evidence["formal_admitted"]
+    result["input_identities"] = {
+        "events_sha256": sha256_file(args.events),
+        "runner_sha256": sha256_file(args.runner),
+        **({"queries_sha256": sha256_file(args.queries)} if args.queries else {}),
+    }
     with atomic_output_dir(args.out) as partial:
         result_path = partial / "result.json"
         _write_json(result_path, result)
@@ -220,12 +448,21 @@ def quality(args: argparse.Namespace) -> int:
             raise ValueError("native quality requires events, labels, artifact and queries")
         results = []
         for alpha in args.alpha:
-            command = [str(Path(args.runner).resolve()), "quality-pq",
+            command = [str(Path(args.runner).resolve()), "quality",
                        str(Path(args.events).resolve()), str(Path(args.labels).resolve()),
                        str(Path(args.artifact).resolve()), str(Path(args.queries).resolve()), str(alpha)]
             results.append(json.loads(subprocess.run(command, check=True, text=True,
                                                      capture_output=True).stdout))
-        report = {"schema_version": 1, "native": True, "summaries": results}
+        report = {"schema_version": 1, "native": True, "summaries": results,
+                  "input_identities": {
+                      "events_sha256": sha256_file(args.events),
+                      "labels_sha256": sha256_file(args.labels),
+                      "queries_sha256": sha256_file(args.queries),
+                      "artifact_manifest_sha256": sha256_file(
+                          Path(args.artifact) / "manifest.json"),
+                      "artifact_native_cfg_sha256": sha256_file(
+                          Path(args.artifact) / "native.cfg"),
+                  }}
         with atomic_output_dir(args.out) as partial:
             report_path = partial / "quality.json"; _write_json(report_path, report)
             _complete(partial, "quality", [report_path])
@@ -295,8 +532,22 @@ def parser() -> argparse.ArgumentParser:
     pre.add_argument("--config", required=True)
     pre.add_argument("--out", required=True)
     pre.add_argument("--hash-assets", action="store_true")
+    pre.add_argument("--stage", choices=tuple(STAGE_ASSETS), default="generic")
     pre.add_argument("--ledger")
     pre.set_defaults(function=preflight)
+    split_command = commands.add_parser("convert-split")
+    split_command.add_argument("--input", required=True)
+    split_command.add_argument("--query-count", type=int, required=True)
+    split_command.add_argument("--out", required=True)
+    split_command.add_argument("--ledger")
+    split_command.set_defaults(function=convert_split)
+    legacy = commands.add_parser("wrap-legacy")
+    legacy.add_argument("--sidecar", required=True)
+    legacy.add_argument("--residual")
+    legacy.add_argument("--catalog", required=True)
+    legacy.add_argument("--out", required=True)
+    legacy.add_argument("--ledger")
+    legacy.set_defaults(function=wrap_legacy)
     val = commands.add_parser("validate")
     val.add_argument("--events", required=True)
     val.add_argument("--labels")
@@ -314,6 +565,9 @@ def parser() -> argparse.ArgumentParser:
     timing.add_argument("--artifact")
     timing.add_argument("--matrix")
     timing.add_argument("--queries")
+    timing.add_argument("--validation")
+    timing.add_argument("--quality-report")
+    timing.add_argument("--formal", action="store_true")
     timing.add_argument("--out", required=True)
     timing.add_argument("--ledger")
     timing.set_defaults(function=bench)

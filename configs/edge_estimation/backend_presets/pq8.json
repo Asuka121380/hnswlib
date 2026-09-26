@@ -1,1 +1,1 @@
-{"schema_version":1,"representation":{"kind":"direct_unit_edge"},"codec":{"kind":"pq_packed","m":64,"nbits":8,"layout":"packed_nbits"},"correction":{"kind":"none"}}
+{"schema_version":1,"representation":{"kind":"direct_unit_edge"},"codec":{"kind":"pq_packed","m":32,"nbits":8,"layout":"packed_nbits"},"correction":{"kind":"none"},"trainer":{"provider":"faiss","threads":1}}

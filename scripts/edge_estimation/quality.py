@@ -21,6 +21,21 @@ def _ratio(numerator: int, denominator: int) -> float | None:
     return None if denominator == 0 else numerator / denominator
 
 
+def _error_summary(values: Sequence[float]) -> Mapping[str, float | int]:
+    ordered = sorted(values)
+    if not ordered:
+        return {"count": 0, "p50": 0.0, "p90": 0.0, "p95": 0.0,
+                "p99": 0.0, "max": 0.0}
+    def percentile(fraction: float) -> float:
+        position = fraction * (len(ordered) - 1)
+        lower, upper = int(math.floor(position)), int(math.ceil(position))
+        weight = position - lower
+        return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+    return {"count": len(ordered), "p50": percentile(0.50),
+            "p90": percentile(0.90), "p95": percentile(0.95),
+            "p99": percentile(0.99), "max": ordered[-1]}
+
+
 def summarize(events: Sequence[ScoredEvent], alpha: float) -> Mapping[str, object]:
     if not math.isfinite(alpha) or alpha < 0:
         raise ValueError("alpha must be finite and non-negative")
@@ -33,11 +48,21 @@ def summarize(events: Sequence[ScoredEvent], alpha: float) -> Mapping[str, objec
     ]
     tp = fp = fn = tn = valid = 0
     per_query: dict[int, Counter[str]] = {}
+    per_query_errors: dict[int, tuple[list[float], list[float]]] = {}
+    overestimate: list[float] = []
+    underestimate: list[float] = []
     for event in decision_set:
         is_valid = (event.status == "valid" and
                     event.estimated_squared_distance is not None and
                     math.isfinite(event.estimated_squared_distance))
         valid += int(is_valid)
+        if is_valid:
+            signed_error = float(event.estimated_squared_distance) - event.exact_squared_distance
+            over, under = max(0.0, signed_error), max(0.0, -signed_error)
+            overestimate.append(over); underestimate.append(under)
+            query_over, query_under = per_query_errors.setdefault(
+                event.query_id, ([], []))
+            query_over.append(over); query_under.append(under)
         prune = bool(is_valid and
                      event.estimated_squared_distance > alpha * event.threshold)
         far = event.exact_squared_distance > event.threshold
@@ -68,5 +93,14 @@ def summarize(events: Sequence[ScoredEvent], alpha: float) -> Mapping[str, objec
             "total_prune_rate": _ratio(tp + fp, total),
             "valid_estimate_coverage": _ratio(valid, total),
         },
-        "per_query": {str(key): dict(value) for key, value in sorted(per_query.items())},
+        "error_percentiles": {"overestimate": _error_summary(overestimate),
+                              "underestimate": _error_summary(underestimate)},
+        "per_query": {
+            str(key): {"counts": dict(value),
+                       "overestimate": _error_summary(
+                           per_query_errors.get(key, ([], []))[0]),
+                       "underestimate": _error_summary(
+                           per_query_errors.get(key, ([], []))[1])}
+            for key, value in sorted(per_query.items())
+        },
     }

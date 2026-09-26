@@ -4,13 +4,16 @@
 #include <iostream>
 #include <limits>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "backend_factory.h"
+#include "backend_registry.h"
 #include "event_format.h"
 #include "evaluator.h"
 #include "backends/pq_packed.h"
-#include "backends/pq_packed_artifact.h"
+#include "query_store.h"
 
 namespace {
 
@@ -29,11 +32,31 @@ class IdentityReplayKernel {
     uint64_t source_calls_;
 };
 
+void printErrorPercentiles(const uq::ErrorPercentiles& value) {
+    std::cout << "{\"count\":" << value.count
+              << ",\"p50\":" << value.p50
+              << ",\"p90\":" << value.p90
+              << ",\"p95\":" << value.p95
+              << ",\"p99\":" << value.p99
+              << ",\"max\":" << value.maximum << '}';
+}
+
+void printQualityCounters(const uq::QualityCounters& value) {
+    std::cout << "{\"event_count_u\":" << value.event_count_u
+              << ",\"decision_count_s\":" << value.decision_count_s
+              << ",\"valid_estimate_count\":" << value.valid_estimate_count
+              << ",\"fallback_count\":" << value.fallback_count
+              << ",\"tp\":" << value.tp << ",\"fp\":" << value.fp
+              << ",\"fn\":" << value.fn << ",\"tn\":" << value.tn << '}';
+}
+
 void usage() {
     std::cerr << "usage:\n"
               << "  uq_native_runner capabilities\n"
               << "  uq_native_runner validate EVENTS [LABELS RANGES]\n"
               << "  uq_native_runner validate-artifact ARTIFACT EVENTS QUERIES\n"
+              << "  uq_native_runner quality EVENTS LABELS ARTIFACT QUERIES ALPHA\n"
+              << "  uq_native_runner bench-artifact EVENTS ARTIFACT QUERIES [REPEATS]\n"
               << "  uq_native_runner quality-pq EVENTS LABELS ARTIFACT QUERIES ALPHA\n"
               << "  uq_native_runner bench-pq EVENTS ARTIFACT QUERIES [REPEATS]\n"
               << "  uq_native_runner bench EVENTS [REPEATS]\n";
@@ -59,25 +82,23 @@ int run(int argc, char** argv) {
 #else
             << "\"capture_compiled\":false,"
 #endif
-            << "\"backends\":["
-            << "{\"name\":\"pq_packed\",\"available\":true,"
-            << "\"supports_scalar\":true,\"layouts\":[\"packed4\",\"packed_nbits\"]},"
-#ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
-            << "{\"name\":\"pq_legacy\",\"available\":true,\"requires_artifact\":true},"
-#else
-            << "{\"name\":\"pq_legacy\",\"available\":false,\"reason\":\"not-compiled\"},"
-#endif
-#ifdef HNSWLIB_ENABLE_V0_RESIDUAL_ESTIMATOR
-            << "{\"name\":\"pq_qjl_legacy\",\"available\":true,\"requires_artifact\":true},"
-#else
-            << "{\"name\":\"pq_qjl_legacy\",\"available\":false,\"reason\":\"not-compiled\"},"
-#endif
-            << "{\"name\":\"opq\",\"available\":false,\"reason\":\"faiss-adapter-not-compiled\"},"
-            << "{\"name\":\"prq\",\"available\":false,\"reason\":\"faiss-adapter-not-compiled\"},"
-            << "{\"name\":\"jq\",\"available\":false,\"reason\":\"jq-source-not-imported\"},"
-            << "{\"name\":\"rabitq\",\"available\":false,\"reason\":\"external-dependency-not-compiled\"},"
-            << "{\"name\":\"saq\",\"available\":false,\"reason\":\"external-dependency-or-isa-unavailable\"}]"
-            << "}\n";
+            << "\"backends\":[";
+        const std::vector<uq::BackendCapability> capabilities = uq::allBackendCapabilities();
+        for (size_t i = 0; i < capabilities.size(); ++i) {
+            const uq::BackendCapability& value = capabilities[i];
+            if (i) std::cout << ',';
+            std::cout << "{\"name\":\"" << value.name << "\""
+                      << ",\"compiled\":" << (value.compiled ? "true" : "false")
+                      << ",\"native_available\":" << (value.native_available ? "true" : "false")
+                      << ",\"artifact_supported\":" << (value.artifact_supported ? "true" : "false")
+                      << ",\"runtime_isa_supported\":" << (value.runtime_isa_supported ? "true" : "false")
+                      << ",\"formal_validation_passed\":" << (value.formal_validation_passed ? "true" : "false")
+                      << ",\"supports_scalar\":" << (value.supports_scalar ? "true" : "false");
+            if (value.reason && *value.reason)
+                std::cout << ",\"reason\":\"" << value.reason << "\"";
+            std::cout << '}';
+        }
+        std::cout << "]}\n";
         return 0;
     }
     if (command == "validate") {
@@ -106,58 +127,94 @@ int run(int argc, char** argv) {
     if (command == "validate-artifact") {
         if (argc != 5) { usage(); return 2; }
         uq::Header header; const std::vector<uq::EventRecord> events = uq::readEvents(argv[3], &header);
-        uq::PackedPqArtifactKernel kernel(argv[2], argv[4], header);
-        if (!events.empty()) {
-            for (const uq::EventRecord& event : events)
-                if (event.kind == uq::EventKind::QueryBegin) { kernel.prepareQuery(event.query_id); break; }
-        }
-        std::cout << "{\"valid\":true,\"backend\":\"pq_packed\",\"backend_bytes\":"
-                  << kernel.backendBytes() << "}\n";
-        return 0;
+        std::shared_ptr<const uq::QueryStore> queries =
+            std::make_shared<uq::QueryStore>(argv[4], header.dimension);
+        return uq::withArtifactKernel(argv[2], queries, header,
+            [&](auto& kernel, const uq::ArtifactDescriptor& descriptor) {
+                for (const uq::EventRecord& event : events)
+                    if (event.kind == uq::EventKind::QueryBegin) {
+                        kernel.prepareQuery(event.query_id); break;
+                    }
+                std::cout << "{\"valid\":true,\"backend\":\"" << descriptor.backend_name
+                          << "\",\"format\":\"" << descriptor.format
+                          << "\",\"backend_bytes\":" << kernel.backendBytes() << "}\n";
+                return 0;
+            });
     }
-    if (command == "quality-pq") {
+    if (command == "quality" || command == "quality-pq") {
         if (argc != 7) { usage(); return 2; }
         uq::Header event_header, label_header;
         const std::vector<uq::EventRecord> events = uq::readEvents(argv[2], &event_header);
         const std::vector<uq::LabelRecord> labels = uq::readLabels(argv[3], &label_header);
         if (event_header.identity != label_header.identity) throw std::runtime_error("label identity mismatch");
-        uq::PackedPqArtifactKernel kernel(argv[4], argv[5], event_header);
+        std::shared_ptr<const uq::QueryStore> queries =
+            std::make_shared<uq::QueryStore>(argv[5], event_header.dimension);
         const double alpha = std::stod(argv[6]);
-        const uq::QualityCounters value = uq::evaluateQuality(events, labels, alpha, kernel);
-        std::cout << "{\"schema_version\":1,\"backend\":\"pq_packed\",\"alpha\":" << alpha
-                  << ",\"event_count_u\":" << value.event_count_u
-                  << ",\"decision_count_s\":" << value.decision_count_s
-                  << ",\"valid_estimate_count\":" << value.valid_estimate_count
-                  << ",\"fallback_count\":" << value.fallback_count
-                  << ",\"tp\":" << value.tp << ",\"fp\":" << value.fp
-                  << ",\"fn\":" << value.fn << ",\"tn\":" << value.tn << "}\n";
-        return 0;
+        return uq::withArtifactKernel(argv[4], queries, event_header,
+            [&](auto& kernel, const uq::ArtifactDescriptor& descriptor) {
+                const uq::QualityReport report =
+                    uq::evaluateQualityDetailed(events, labels, alpha, kernel);
+                const uq::QualityCounters& value = report.counters;
+                std::cout << "{\"schema_version\":1,\"backend\":\"" << descriptor.backend_name
+                          << "\",\"alpha\":" << alpha
+                          << ",\"event_count_u\":" << value.event_count_u
+                          << ",\"decision_count_s\":" << value.decision_count_s
+                          << ",\"valid_estimate_count\":" << value.valid_estimate_count
+                          << ",\"fallback_count\":" << value.fallback_count
+                          << ",\"tp\":" << value.tp << ",\"fp\":" << value.fp
+                          << ",\"fn\":" << value.fn << ",\"tn\":" << value.tn
+                          << ",\"error_percentiles\":{\"overestimate\":";
+                printErrorPercentiles(report.overestimate_error);
+                std::cout << ",\"underestimate\":";
+                printErrorPercentiles(report.underestimate_error);
+                std::cout << "},\"per_query\":[";
+                for (size_t i = 0; i < report.per_query.size(); ++i) {
+                    if (i) std::cout << ',';
+                    const uq::QueryQualityReport& query = report.per_query[i];
+                    std::cout << "{\"query_id\":" << query.query_id << ",\"counts\":";
+                    printQualityCounters(query.counters);
+                    std::cout << ",\"overestimate\":";
+                    printErrorPercentiles(query.overestimate_error);
+                    std::cout << ",\"underestimate\":";
+                    printErrorPercentiles(query.underestimate_error);
+                    std::cout << '}';
+                }
+                std::cout << "]}\n";
+                return 0;
+            });
     }
-    if (command == "bench-pq") {
+    if (command == "bench-artifact" || command == "bench-pq") {
         if (argc != 5 && argc != 6) { usage(); return 2; }
         const size_t repeats = argc == 6 ? static_cast<size_t>(std::stoull(argv[5])) : 1U;
+        if (repeats == 0U) throw std::invalid_argument("repeats must be positive");
         uq::Header header; const std::vector<uq::EventRecord> events = uq::readEvents(argv[2], &header);
-        uq::PackedPqArtifactKernel warmup(argv[3], argv[4], header);
-        (void)uq::replayOrderedEstimator(events, warmup, 1U);
-        std::vector<uq::ReplayCounters> runs;
-        uint64_t backend_bytes = 0U, scratch_bytes = 0U;
-        for (size_t i = 0; i < repeats; ++i) {
-            uq::PackedPqArtifactKernel kernel(argv[3], argv[4], header);
-            runs.push_back(uq::replayOrderedEstimator(events, kernel, 1U));
-            backend_bytes = kernel.backendBytes(); scratch_bytes = kernel.scratchBytes();
-        }
-        std::cout << "{\"schema_version\":1,\"backend\":\"pq_packed\",\"mode\":\"ordered_estimator\","
-                  << "\"quality_valid\":true,\"raw_elapsed_ns\":[";
-        for (size_t i = 0; i < runs.size(); ++i) { if (i) std::cout << ','; std::cout << runs[i].elapsed_ns; }
-        const uq::ReplayCounters& value = runs.at(0);
-        std::cout << "],\"query_count\":" << value.query_count
-                  << ",\"source_setup_calls\":" << value.source_count
-                  << ",\"eligible_events\":" << value.eligible_count
-                  << ",\"fallback_count\":" << value.fallback_count
-                  << ",\"checksum\":" << value.checksum
-                  << ",\"memory_report\":{\"backend_bytes\":" << backend_bytes
-                  << ",\"scratch_bytes\":" << scratch_bytes << ",\"peak_rss_bytes\":null}}\n";
-        return 0;
+        std::shared_ptr<const uq::QueryStore> queries =
+            std::make_shared<uq::QueryStore>(argv[4], header.dimension);
+        return uq::withArtifactKernel(argv[3], queries, header,
+            [&](auto& kernel, const uq::ArtifactDescriptor& descriptor) {
+                (void)uq::replayOrderedEstimator(events, kernel, 1U);
+                std::vector<uq::ReplayCounters> runs;
+                for (size_t i = 0; i < repeats; ++i)
+                    runs.push_back(uq::replayOrderedEstimator(events, kernel, 1U));
+                std::cout << "{\"schema_version\":1,\"backend\":\"" << descriptor.backend_name
+                          << "\",\"mode\":\"ordered_estimator\","
+                          << "\"quality_valid\":false,\"formal_validation_passed\":false,"
+                          << "\"raw_elapsed_ns\":[";
+                for (size_t i = 0; i < runs.size(); ++i) {
+                    if (i) std::cout << ','; std::cout << runs[i].elapsed_ns;
+                }
+                const uq::ReplayCounters& value = runs.at(0);
+                std::cout << "],\"query_count\":" << value.query_count
+                          << ",\"source_setup_calls\":" << value.source_count
+                          << ",\"eligible_events\":" << value.eligible_count
+                          << ",\"fallback_count\":" << value.fallback_count
+                          << ",\"checksum\":" << value.checksum
+                          << ",\"memory_report\":{\"backend_bytes\":" << kernel.backendBytes()
+                          << ",\"query_store_bytes\":" << queries->bytes()
+                          << ",\"scratch_bytes\":" << kernel.scratchBytes()
+                          << ",\"peak_rss_bytes\":null}}\n";
+                return 0;
+            });
     }
     if (command == "bench") {
         if (argc != 3 && argc != 4) { usage(); return 2; }

@@ -86,13 +86,21 @@ int main() {
     uq::validateEvents(events);
     const std::vector<uq::LabelRecord> labels{{3, 12.0}, {4, 10.0}, {5, 15.0}};
     Kernel quality_kernel;
-    const uq::QualityCounters quality =
-        uq::evaluateQuality(events, labels, 1.0, quality_kernel);
+    const uq::QualityReport quality_report =
+        uq::evaluateQualityDetailed(events, labels, 1.0, quality_kernel);
+    const uq::QualityCounters& quality = quality_report.counters;
     if (quality.decision_count_s != 3U || quality.tp != 0U || quality.fp != 0U ||
         quality.fn != 2U || quality.tn != 1U || quality.fallback_count != 1U)
         throw std::runtime_error("native quality confusion matrix mismatch");
     if (quality_kernel.query_calls != 1U || quality_kernel.source_calls != 1U)
         throw std::runtime_error("quality lifecycle count mismatch");
+    if (quality_report.per_query.size() != 1U ||
+        quality_report.per_query[0].query_id != 5U ||
+        quality_report.overestimate_error.count != 2U ||
+        quality_report.underestimate_error.count != 2U ||
+        std::abs(quality_report.overestimate_error.maximum - 0.0) > 1e-12 ||
+        std::abs(quality_report.underestimate_error.maximum - 3.0) > 1e-12)
+        throw std::runtime_error("quality error percentile mismatch");
     Kernel timing_kernel;
     const uq::ReplayCounters timing = uq::replayOrderedEstimator(events, timing_kernel, 2U);
     if (timing.query_count != 2U || timing.source_count != 2U ||

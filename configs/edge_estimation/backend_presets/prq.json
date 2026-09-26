@@ -1,1 +1,1 @@
-{"schema_version":1,"representation":{"kind":"direct_unit_edge"},"codec":{"kind":"prq"},"correction":{"kind":"none"},"expected_status":"unavailable_without_faiss_adapter"}
+{"schema_version":1,"representation":{"kind":"direct_unit_edge"},"codec":{"kind":"prq","nsplits":16,"stages_per_split":2,"nbits":8,"layout":"split_stage_codes"},"correction":{"kind":"none"},"trainer":{"provider":"faiss","threads":1,"beam_size":5}}

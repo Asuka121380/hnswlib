@@ -8,6 +8,7 @@
 
 #include "pq_legacy.h"
 #include "hnswlib/edge_quant_v0_residual.h"
+#include "hnswlib/edge_quant_v0_residual_io.h"
 
 namespace uq {
 
@@ -45,6 +46,68 @@ class PqQjlLegacyScoreKernel {
  private:
     const hnswlib::EdgeQuantV0ApproxQueryContext& pq_query_;
     const hnswlib::V0ResidualQueryContext& residual_query_;
+};
+
+class PqQjlLegacyArtifactKernel {
+ public:
+    PqQjlLegacyArtifactKernel(const std::filesystem::path& root,
+                              std::shared_ptr<const QueryStore> queries,
+                              const Header& event_header)
+        : queries_(queries), config_(readNativeConfig(root / "native.cfg")),
+          pq_(root, std::move(queries), event_header,
+              "uq-pq-qjl-legacy/1", "pq_qjl_legacy"),
+          current_query_(~uint64_t(0)) {
+        const std::filesystem::path sidecar_path =
+            checkedArtifactPath(root, config_.at("sidecar"));
+        const std::filesystem::path residual_path =
+            checkedArtifactPath(root, config_.at("residual"));
+        if (artifactSha256(residual_path) != config_.at("residual_sha256"))
+            throw std::runtime_error("legacy residual artifact hash mismatch");
+        hnswlib::V0ResidualIdentity expected;
+        expected.index_sha = pq_.sidecarView().header().base_index_sha256;
+        expected.sidecar_sha = hnswlib::v0ResidualFileSha(sidecar_path.string());
+        expected.adjacency_sha = pq_.sidecarView().header().adjacency_sha256;
+        residual_.reset(new hnswlib::V0ResidualCompanion(
+            residual_path.string(), expected, event_header.dimension,
+            pq_.sidecarView().header().directed_edge_count));
+    }
+
+    void prepareQuery(uint64_t query_id) {
+        pq_.prepareQuery(query_id);
+        residual_query_.reset(new hnswlib::V0ResidualQueryContext(
+            queries_->query(query_id), residual_->matrix(), residual_->dimension(),
+            residual_->bits()));
+        current_query_ = query_id;
+    }
+    void prepareSource(const EventRecord& event) { pq_.prepareSource(event); }
+    double score(const EventRecord& event) {
+        if (!residual_query_ || current_query_ != event.query_id ||
+            event.edge_id >= residual_->count())
+            return std::numeric_limits<double>::quiet_NaN();
+        const hnswlib::V0RawEstimateResult raw = pq_.rawScore(event);
+        const uint8_t* record = residual_->record(event.edge_id);
+        if (!raw.valid() || !residual_->valid(record))
+            return std::numeric_limits<double>::quiet_NaN();
+        const double corrected = residual_query_->correct(
+            raw.approximate_squared_distance, record,
+            residual_->scale(record), residual_->offset(record));
+        return std::isfinite(corrected) ? corrected
+                                        : std::numeric_limits<double>::quiet_NaN();
+    }
+    uint64_t backendBytes() const {
+        return pq_.backendBytes() + residual_->storageBytes();
+    }
+    uint64_t scratchBytes() const {
+        return pq_.scratchBytes() + static_cast<uint64_t>(residual_->bits()) * 20U;
+    }
+
+ private:
+    std::shared_ptr<const QueryStore> queries_;
+    std::map<std::string, std::string> config_;
+    PqLegacyArtifactKernel pq_;
+    std::unique_ptr<hnswlib::V0ResidualCompanion> residual_;
+    std::unique_ptr<hnswlib::V0ResidualQueryContext> residual_query_;
+    uint64_t current_query_;
 };
 
 }  // namespace uq

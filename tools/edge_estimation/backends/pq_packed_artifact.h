@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -15,6 +16,7 @@
 #include "hnswlib/edge_estimation/score_bridge.h"
 #include "hnswlib/edge_quant_v0_checksum.h"
 #include "../event_format.h"
+#include "../query_store.h"
 
 namespace uq {
 
@@ -68,12 +70,30 @@ inline std::string artifactSha256(const std::filesystem::path& path) {
     return hnswlib::edgeQuantV0Sha256Hex(sha.final());
 }
 
+inline std::vector<float> readArtifactFloats(const std::filesystem::path& path) {
+    const std::vector<uint8_t> bytes = detail::readFile(path.string());
+    if (bytes.size() % 4U) throw std::runtime_error("float file size mismatch");
+    std::vector<float> values(bytes.size() / 4U);
+    for (size_t i = 0; i < values.size(); ++i) {
+        const uint32_t raw = detail::readU32(bytes.data() + i * 4U);
+        std::memcpy(&values[i], &raw, 4U);
+        if (!std::isfinite(values[i])) throw std::runtime_error("non-finite model value");
+    }
+    return values;
+}
+
 class PackedPqArtifactKernel {
  public:
     PackedPqArtifactKernel(const std::filesystem::path& root,
                            const std::filesystem::path& queries,
                            const Header& event_header)
-        : root_(root), queries_(queries), config_(readNativeConfig(root / "native.cfg")),
+        : PackedPqArtifactKernel(
+              root, std::make_shared<QueryStore>(queries, event_header.dimension), event_header) {}
+
+    PackedPqArtifactKernel(const std::filesystem::path& root,
+                           std::shared_ptr<const QueryStore> queries,
+                           const Header& event_header)
+        : root_(root), queries_(std::move(queries)), config_(readNativeConfig(root / "native.cfg")),
           dimension_(number("dimension")), m_(number("m")), nbits_(number("nbits")),
           dsub_(number("dsub")), edge_count_(number64("edge_count")),
           record_size_(number("record_size")), model_(m_, nbits_), current_query_(~uint64_t(0)) {
@@ -89,26 +109,18 @@ class PackedPqArtifactKernel {
         if (artifactSha256(codebook_path) != config_.at("codebook_sha256") ||
             artifactSha256(records_path) != config_.at("records_sha256"))
             throw std::runtime_error("artifact file hash mismatch");
-        codebook_ = readFloats(codebook_path);
+        codebook_ = readArtifactFloats(codebook_path);
         if (codebook_.size() != static_cast<size_t>(m_) * model_.centroidCount() * dsub_)
             throw std::runtime_error("packed PQ codebook size mismatch");
         records_ = detail::readFile(records_path.string());
         if (records_.size() != edge_count_ * record_size_)
             throw std::runtime_error("packed PQ records size mismatch");
-        const uint64_t stride = 4U + static_cast<uint64_t>(dimension_) * 4U;
-        if (std::filesystem::file_size(queries_) % stride)
-            throw std::runtime_error("query fvecs file size mismatch");
+        if (!queries_ || queries_->dimension() != dimension_)
+            throw std::runtime_error("query store dimension mismatch");
     }
 
     void prepareQuery(uint64_t query_id) {
-        const uint64_t stride = 4U + static_cast<uint64_t>(dimension_) * 4U;
-        if (query_id >= std::filesystem::file_size(queries_) / stride)
-            throw std::runtime_error("query id out of range");
-        std::ifstream input(queries_, std::ios::binary);
-        input.seekg(static_cast<std::streamoff>(query_id * stride));
-        uint32_t stored = 0U; input.read(reinterpret_cast<char*>(&stored), 4);
-        std::vector<float> query(dimension_); input.read(reinterpret_cast<char*>(query.data()), dimension_ * 4U);
-        if (!input || stored != dimension_) throw std::runtime_error("query fvec read failed");
+        const float* query = queries_->query(query_id);
         lut_.assign(static_cast<size_t>(m_) * model_.centroidCount(), 0.0f);
         for (uint32_t sub = 0; sub < m_; ++sub)
             for (uint32_t code = 0; code < model_.centroidCount(); ++code) {
@@ -127,6 +139,8 @@ class PackedPqArtifactKernel {
         const uint8_t* record = records_.data() + event.edge_id * record_size_;
         const double length = detail::readF64(record);
         const double anchor = detail::readF64(record + 8U);
+        if (!(length > 0.0) || !std::isfinite(length) || !std::isfinite(anchor))
+            return std::numeric_limits<double>::quiet_NaN();
         const hnswlib::edge_estimation::DotEstimate qdot =
             model_.estimate(lut_, record + 16U, model_.packedCodeBytes());
         if (!qdot.valid()) return std::numeric_limits<double>::quiet_NaN();
@@ -146,18 +160,8 @@ class PackedPqArtifactKernel {
     void require(const char* key, const char* value) const {
         if (config_.at(key) != value) throw std::runtime_error("unsupported artifact contract");
     }
-    static std::vector<float> readFloats(const std::filesystem::path& path) {
-        const std::vector<uint8_t> bytes = detail::readFile(path.string());
-        if (bytes.size() % 4U) throw std::runtime_error("float file size mismatch");
-        std::vector<float> values(bytes.size() / 4U);
-        for (size_t i = 0; i < values.size(); ++i) {
-            const uint32_t raw = detail::readU32(bytes.data() + i * 4U);
-            std::memcpy(&values[i], &raw, 4U);
-            if (!std::isfinite(values[i])) throw std::runtime_error("non-finite codebook value");
-        }
-        return values;
-    }
-    std::filesystem::path root_, queries_;
+    std::filesystem::path root_;
+    std::shared_ptr<const QueryStore> queries_;
     std::map<std::string, std::string> config_;
     uint32_t dimension_, m_, nbits_, dsub_; uint64_t edge_count_; uint32_t record_size_;
     PackedPqModel model_; uint64_t current_query_;

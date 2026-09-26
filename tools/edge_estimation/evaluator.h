@@ -1,11 +1,13 @@
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <vector>
 
@@ -40,6 +42,54 @@ struct QualityCounters {
         : event_count_u(0), decision_count_s(0), valid_estimate_count(0),
           fallback_count(0), tp(0), fp(0), fn(0), tn(0) {}
 };
+
+struct ErrorPercentiles {
+    uint64_t count;
+    double p50;
+    double p90;
+    double p95;
+    double p99;
+    double maximum;
+
+    ErrorPercentiles()
+        : count(0), p50(0.0), p90(0.0), p95(0.0), p99(0.0), maximum(0.0) {}
+};
+
+struct QueryQualityReport {
+    uint64_t query_id;
+    QualityCounters counters;
+    ErrorPercentiles overestimate_error;
+    ErrorPercentiles underestimate_error;
+};
+
+struct QualityReport {
+    QualityCounters counters;
+    ErrorPercentiles overestimate_error;
+    ErrorPercentiles underestimate_error;
+    std::vector<QueryQualityReport> per_query;
+};
+
+inline double percentileFromSorted(const std::vector<double>& values, double fraction) {
+    if (values.empty()) return 0.0;
+    const double position = fraction * static_cast<double>(values.size() - 1U);
+    const size_t lower = static_cast<size_t>(std::floor(position));
+    const size_t upper = static_cast<size_t>(std::ceil(position));
+    const double weight = position - static_cast<double>(lower);
+    return values[lower] * (1.0 - weight) + values[upper] * weight;
+}
+
+inline ErrorPercentiles summarizeErrors(std::vector<double> values) {
+    ErrorPercentiles result;
+    if (values.empty()) return result;
+    std::sort(values.begin(), values.end());
+    result.count = static_cast<uint64_t>(values.size());
+    result.p50 = percentileFromSorted(values, 0.50);
+    result.p90 = percentileFromSorted(values, 0.90);
+    result.p95 = percentileFromSorted(values, 0.95);
+    result.p99 = percentileFromSorted(values, 0.99);
+    result.maximum = values.back();
+    return result;
+}
 
 // Kernel contract: prepareQuery(query_id), prepareSource(event), score(event).
 // score returns a finite double or NaN to request exact fallback.
@@ -101,14 +151,23 @@ ReplayCounters replayOrderedEstimator(
 // ordered timing pass. Labels are consumed here only and are never accepted by
 // replayOrderedEstimator.
 template<class Kernel>
-QualityCounters evaluateQuality(
+QualityReport evaluateQualityDetailed(
     const std::vector<EventRecord>& events,
     const std::vector<LabelRecord>& labels,
     double alpha,
     Kernel& kernel) {
     if (!std::isfinite(alpha) || alpha < 0.0)
         throw std::invalid_argument("alpha must be finite and non-negative");
-    QualityCounters result;
+    QualityReport report;
+    QualityCounters& result = report.counters;
+    struct WorkingQuery {
+        QualityCounters counters;
+        std::vector<double> over;
+        std::vector<double> under;
+    };
+    std::map<uint64_t, WorkingQuery> per_query;
+    std::vector<double> overestimate_error;
+    std::vector<double> underestimate_error;
     EventRecord pending_source{};
     bool have_source = false;
     bool source_prepared = false;
@@ -134,12 +193,15 @@ QualityCounters evaluateQuality(
         }
         if (event.kind != EventKind::Candidate) continue;
         ++result.event_count_u;
+        WorkingQuery& query = per_query[event.query_id];
+        ++query.counters.event_count_u;
         const bool in_decision_set = (event.flags & ThresholdValid) != 0U &&
             (event.flags & ScoreSlotEligible) != 0U &&
             std::isfinite(event.threshold_before) &&
             event.threshold_before >= 0.0 && std::isfinite(exact);
         if (!in_decision_set) continue;
         ++result.decision_count_s;
+        ++query.counters.decision_count_s;
         if (!have_source)
             throw std::runtime_error("quality candidate has no source context");
         if (!source_prepared) {
@@ -148,18 +210,50 @@ QualityCounters evaluateQuality(
         }
         const double score = kernel.score(event);
         const bool valid = std::isfinite(score);
-        if (valid) ++result.valid_estimate_count;
-        else ++result.fallback_count;
+        if (valid) {
+            ++result.valid_estimate_count;
+            ++query.counters.valid_estimate_count;
+            const double signed_error = score - exact;
+            const double over = std::max(0.0, signed_error);
+            const double under = std::max(0.0, -signed_error);
+            overestimate_error.push_back(over);
+            underestimate_error.push_back(under);
+            query.over.push_back(over);
+            query.under.push_back(under);
+        } else {
+            ++result.fallback_count;
+            ++query.counters.fallback_count;
+        }
         const bool prune = valid && score > alpha * event.threshold_before;
         const bool far = exact > event.threshold_before;
-        if (prune && far) ++result.tp;
-        else if (prune) ++result.fp;
-        else if (far) ++result.fn;
-        else ++result.tn;
+        if (prune && far) { ++result.tp; ++query.counters.tp; }
+        else if (prune) { ++result.fp; ++query.counters.fp; }
+        else if (far) { ++result.fn; ++query.counters.fn; }
+        else { ++result.tn; ++query.counters.tn; }
     }
     if (label_index != labels.size())
         throw std::runtime_error("quality labels contain extra records");
-    return result;
+    report.overestimate_error = summarizeErrors(overestimate_error);
+    report.underestimate_error = summarizeErrors(underestimate_error);
+    for (typename std::map<uint64_t, WorkingQuery>::iterator it = per_query.begin();
+         it != per_query.end(); ++it) {
+        QueryQualityReport query_report;
+        query_report.query_id = it->first;
+        query_report.counters = it->second.counters;
+        query_report.overestimate_error = summarizeErrors(it->second.over);
+        query_report.underestimate_error = summarizeErrors(it->second.under);
+        report.per_query.push_back(query_report);
+    }
+    return report;
+}
+
+template<class Kernel>
+QualityCounters evaluateQuality(
+    const std::vector<EventRecord>& events,
+    const std::vector<LabelRecord>& labels,
+    double alpha,
+    Kernel& kernel) {
+    return evaluateQualityDetailed(events, labels, alpha, kernel).counters;
 }
 
 }  // namespace uq

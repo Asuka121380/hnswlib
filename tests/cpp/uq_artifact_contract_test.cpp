@@ -27,7 +27,11 @@ int main() {
     }
     if (!rejected) throw std::runtime_error("artifact path traversal was accepted");
     if (!uq::resolveBackend("pq_packed").compiled ||
-        uq::resolveBackend("opq").compiled)
+        !uq::resolveBackend("opq").compiled ||
+        !uq::resolveBackend("prq").compiled ||
+        !uq::resolveBackend("jq").compiled ||
+        !uq::resolveBackend("rabitq").compiled ||
+        uq::resolveBackend("saq").compiled)
         throw std::runtime_error("backend registry mismatch");
     std::cout << "uq_artifact_contract_test_ok" << std::endl;
     return 0;

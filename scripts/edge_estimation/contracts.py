@@ -30,6 +30,39 @@ class ContractError(ValueError):
     pass
 
 
+CONFIG_V1_KEYS = {
+    "schema_version", "run_id", "dataset_manifest", "artifact",
+    "representation", "codec", "correction", "policy", "capture",
+    "trainer", "query_lifecycle", "quality", "timing",
+}
+
+
+def validate_config_v1(value: Mapping[str, Any]) -> None:
+    if not isinstance(value, Mapping) or value.get("schema_version") != 1:
+        raise ContractError("config must be a schema_version=1 object")
+    unknown = sorted(set(value) - CONFIG_V1_KEYS)
+    if unknown:
+        raise ContractError(f"config contains unknown keys: {', '.join(unknown)}")
+    required = ("run_id", "representation", "codec", "correction", "policy")
+    missing = [key for key in required if key not in value]
+    if missing:
+        raise ContractError(f"config missing required keys: {', '.join(missing)}")
+    if not isinstance(value["run_id"], str) or not value["run_id"]:
+        raise ContractError("config.run_id must be a non-empty string")
+    for key in ("representation", "codec", "correction", "policy"):
+        section = value[key]
+        if not isinstance(section, Mapping) or not isinstance(section.get("kind"), str):
+            raise ContractError(f"config.{key} must be an object with string kind")
+    alphas = value["policy"].get("alphas")
+    if (not isinstance(alphas, list) or not alphas or
+            any(isinstance(item, bool) or not isinstance(item, (int, float)) or
+                not math.isfinite(float(item)) or float(item) < 0 for item in alphas)):
+        raise ContractError("config.policy.alphas must be non-negative finite numbers")
+    for key in ("capture", "trainer", "query_lifecycle", "quality", "timing"):
+        if key in value and not isinstance(value[key], Mapping):
+            raise ContractError(f"config.{key} must be an object")
+
+
 @dataclass(frozen=True)
 class HeaderRecord:
     magic: bytes

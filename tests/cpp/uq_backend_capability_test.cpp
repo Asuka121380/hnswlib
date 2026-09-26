@@ -8,15 +8,27 @@
 #include "tools/edge_estimation/backends/saq_adapter.h"
 
 int main() {
-    const char* unavailable[] = {"opq", "prq", "jq", "rabitq", "saq"};
+    const uq::BackendCapability opq = uq::resolveBackend("opq");
+    if (!opq.compiled || !opq.native_available || !opq.artifact_supported ||
+        opq.formal_validation_passed)
+        throw std::runtime_error("OPQ runtime capability is inconsistent");
+    const uq::BackendCapability prq = uq::resolveBackend("prq");
+    if (!prq.compiled || !prq.native_available || !prq.artifact_supported)
+        throw std::runtime_error("PRQ runtime capability is inconsistent");
+    const uq::BackendCapability jq = uq::resolveBackend("jq");
+    if (!jq.compiled || !jq.native_available || !jq.artifact_supported)
+        throw std::runtime_error("JQ runtime capability is inconsistent");
+    const uq::BackendCapability rabitq = uq::resolveBackend("rabitq");
+    if (!rabitq.compiled || !rabitq.native_available || !rabitq.artifact_supported)
+        throw std::runtime_error("RaBitQ runtime capability is inconsistent");
+    const char* unavailable[] = {"saq"};
     for (const char* name : unavailable) {
         const uq::BackendCapability capability = uq::resolveBackend(name);
         if (capability.compiled || !capability.reason || !*capability.reason)
             throw std::runtime_error(std::string("ambiguous capability: ") + name);
     }
     const uq::UnavailableBackend adapters[] = {
-        uq::opqBackend(), uq::prqBackend(), uq::jqBackend(),
-        uq::rabitqBackend(), uq::saqBackend()};
+        uq::saqBackend()};
     for (const uq::UnavailableBackend& adapter : adapters) {
         if (adapter.available() || !adapter.reason() || !*adapter.reason())
             throw std::runtime_error("optional adapter did not report unavailable");

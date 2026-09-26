@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "dependencies": {
+    "faiss": {
+      "distribution": "faiss-cpu",
+      "version": "1.15.1",
+      "license": "MIT",
+      "purpose": ["pq_training", "opq_training", "prq_training", "rabitq_training", "canonical_code_parity"],
+      "runtime_linked": false
+    },
+    "jq_behavioral_port": {
+      "upstream_project": "ANU-DB-Mengxuan-Group/VLDB26-JHQ",
+      "recorded_commit": "1636e197a36871db4a79d66d22f9f9dd0fa51e31",
+      "license": "Apache-2.0",
+      "local_source": "scripts/edge_estimation/trainers/jq_behavioral_reference.py",
+      "identity_limit": "behavioral source port; the recorded Git object is not present locally",
+      "runtime_linked": false
+    }
+  },
+  "trainer_environment": {
+    "python": "CPython 3.12",
+    "interface": "scripts/edge_estimation/run.py train-encode --trainer-python PATH"
+  }
+}
