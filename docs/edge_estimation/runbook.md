@@ -64,3 +64,28 @@ wrapper file hashes, catalog identity, edge count, source/slot identity, and com
 
 Static replay cannot establish end-to-end Recall or QPS, and local Windows timings must not be
 ratioed against Linux cluster timings.
+
+## GIST1M quality policy v2
+
+The formal development sweep is defined by
+`configs/edge_estimation/quality_policy_v2.json`.  Alpha is a runtime decision-policy parameter,
+so this sweep reuses completed artifacts and does not retrain or rewrite their model bytes.  The
+two sub-one alphas are diagnostic only.  Formal candidates start at 1.0 and include the frozen
+legacy-PQ anchors 1.45 and 1.54.  Each method is selected independently at balanced and strict
+false-prune gates; the output also recommends a local fine grid around each selected point.
+
+On the cluster, after `artifact-NAME` and `validation-NAME` exist for all six methods, submit the
+frozen array with explicit site resources:
+
+```bash
+scripts/edge_estimation/submit_quality_sweep_slurm.sh \
+  --run-root "$HOME/IndividualProject/results/edge_estimation/RUN" \
+  --account ACCOUNT --partition PARTITION --qos QOS
+```
+
+The wrapper runs at most two methods concurrently by default and writes immutable
+`quality-v2-NAME/{quality,selection,policy,complete}.json` directories.  A successful Slurm exit
+therefore means the native sweep, derived aggregate/per-query metrics, gate selection, input
+fingerprints, and completion marker all succeeded.  Development results may calibrate method
+alphas.  Selection freezes Q*, and audit is final confirmation only; neither static gate is an
+end-to-end Recall guarantee.

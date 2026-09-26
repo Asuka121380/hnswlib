@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "protocol_id": "gist1m-uq-quality-policy-v2",
+  "policy_kind": "scaled_threshold",
+  "diagnostic_alphas": [0.8, 0.9],
+  "candidate_alphas": [
+    1.0,
+    1.1,
+    1.2,
+    1.3,
+    1.4,
+    1.45,
+    1.5,
+    1.54,
+    1.6,
+    1.7,
+    1.8,
+    2.0
+  ],
+  "historical_anchors": {
+    "pq_balanced_beta": 1.45,
+    "pq_strict_beta": 1.54,
+    "provenance": "2026-09-21 frozen legacy PQ replay; anchors guide the sweep but are not inherited optima"
+  },
+  "gates": {
+    "balanced": {
+      "max_global_false_prune_rate": 0.005,
+      "max_p95_query_false_prune_rate": 0.01
+    },
+    "strict": {
+      "max_global_false_prune_rate": 0.001,
+      "max_p95_query_false_prune_rate": 0.0025
+    }
+  },
+  "fine_sweep": {
+    "half_width": 0.05,
+    "step": 0.01,
+    "minimum_candidate_alpha": 1.0,
+    "extension_alphas": [2.2, 2.5]
+  },
+  "selection": {
+    "objective": "maximize_correct_prune_rate_subject_to_gate",
+    "tie_breakers": [
+      "lower_global_false_prune_rate",
+      "higher_prune_precision",
+      "lower_alpha"
+    ]
+  },
+  "split_roles": {
+    "development": "calibrate per-method alpha and configuration",
+    "selection": "freeze Q-star from preselected operating points",
+    "audit": "final confirmation only; no feedback into tuning"
+  }
+}
