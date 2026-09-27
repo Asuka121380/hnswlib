@@ -89,3 +89,17 @@ therefore means the native sweep, derived aggregate/per-query metrics, gate sele
 fingerprints, and completion marker all succeeded.  Development results may calibrate method
 alphas.  Selection freezes Q*, and audit is final confirmation only; neither static gate is an
 end-to-end Recall guarantee.
+
+After all six quality sweeps pass, submit the formal single-thread randomized paired timing job:
+
+```bash
+scripts/edge_estimation/submit_paired_timing_slurm.sh \
+  --run-root "$HOME/IndividualProject/results/edge_estimation/RUN" \
+  --account ACCOUNT --partition PARTITION --qos QOS
+```
+
+The submitter freezes `timing-v2-matrix.json` with all six artifact, validation, and quality-v2
+paths, then runs five randomized blocks with five repeats per method.  PQ8 is the ratio reference.
+The default `4G` request is above the observed quality-sweep peak while avoiding the earlier `8G`
+queue bottleneck.  The immutable result is written to `timing-v2/{result,complete}.json`; cluster
+job elapsed time is not a substitute for the paired estimator measurements in `result.json`.

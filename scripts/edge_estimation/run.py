@@ -315,7 +315,23 @@ def _timing_evidence(validation_path: str | None, quality_path: str | None,
         quality_value = load_strict_json(quality_path)
         if not isinstance(quality_value.get("summaries"), list) or not quality_value["summaries"]:
             raise ValueError("quality evidence has no summaries")
-        identities = quality_value.get("input_identities", {})
+        identities = quality_value.get("input_identities")
+        if identities is None and quality_value.get("stage") == "quality-sweep":
+            inputs = quality_value.get("inputs", {})
+            if isinstance(inputs, Mapping):
+                identity_sources = {
+                    "events_sha256": "events",
+                    "queries_sha256": "queries",
+                    "artifact_manifest_sha256": "artifact_manifest",
+                    "artifact_native_cfg_sha256": "artifact_native_config",
+                }
+                identities = {
+                    target: inputs[source].get("sha256")
+                    for target, source in identity_sources.items()
+                    if isinstance(inputs.get(source), Mapping)
+                }
+        if not isinstance(identities, Mapping):
+            identities = {}
         if any(identities.get(key) != value for key, value in expected.items()):
             raise ValueError("quality evidence identity does not match timing inputs")
         quality_evidence = {"path": str(Path(quality_path).resolve()),

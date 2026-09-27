@@ -11,8 +11,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from scripts.edge_estimation.run import convert_split, preflight, wrap_legacy  # noqa: E402
-from scripts.edge_estimation.contracts import validate_config_v1  # noqa: E402
+from scripts.edge_estimation.run import (  # noqa: E402
+    _timing_evidence, convert_split, preflight, wrap_legacy)
+from scripts.edge_estimation.contracts import (  # noqa: E402
+    file_entry, validate_config_v1)
+from scripts.edge_estimation.prepare_timing_matrix import (  # noqa: E402
+    METHODS, build_matrix, write_matrix)
 
 
 def write_json(path: Path, value: object) -> None:
@@ -90,6 +94,75 @@ class RunContractTest(unittest.TestCase):
             self.assertIn("catalog_identity=" + "1" * 64, native)
             self.assertEqual((output / "legacy" / "sidecar.bin").read_bytes(),
                              sidecar.read_bytes())
+
+    def test_quality_v2_identity_is_admitted_for_formal_timing(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="uq-timing-evidence-") as temporary:
+            root = Path(temporary)
+            events, queries = root / "events.bin", root / "queries.fvecs"
+            events.write_bytes(b"events")
+            queries.write_bytes(b"queries")
+            artifact = root / "artifact"
+            artifact.mkdir()
+            (artifact / "manifest.json").write_bytes(b"manifest")
+            (artifact / "native.cfg").write_bytes(b"native")
+
+            def digest(path: Path) -> str:
+                return hashlib.sha256(path.read_bytes()).hexdigest()
+
+            identities = {
+                "events_sha256": digest(events),
+                "queries_sha256": digest(queries),
+                "artifact_manifest_sha256": digest(artifact / "manifest.json"),
+                "artifact_native_cfg_sha256": digest(artifact / "native.cfg"),
+            }
+            validation = root / "validation.json"
+            write_json(validation, {"valid": True,
+                                    "input_identities": identities})
+            quality = root / "quality.json"
+            write_json(quality, {
+                "stage": "quality-sweep", "summaries": [{"alpha": 1.0}],
+                "inputs": {
+                    "events": {"sha256": identities["events_sha256"]},
+                    "queries": {"sha256": identities["queries_sha256"]},
+                    "artifact_manifest": {
+                        "sha256": identities["artifact_manifest_sha256"]},
+                    "artifact_native_config": {
+                        "sha256": identities["artifact_native_cfg_sha256"]},
+                },
+            })
+            result = _timing_evidence(
+                str(validation), str(quality), str(events), str(queries),
+                str(artifact), True)
+            self.assertTrue(result["formal_admitted"])
+            self.assertIsNotNone(result["quality"])
+
+    def test_build_timing_matrix_freezes_all_six_methods(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="uq-timing-matrix-") as temporary:
+            root = Path(temporary)
+            for method in METHODS:
+                artifact = root / f"artifact-{method}"
+                artifact.mkdir()
+                (artifact / "manifest.json").write_text("{}", encoding="utf-8")
+                (artifact / "native.cfg").write_text("format=test\n", encoding="ascii")
+                validation = root / f"validation-{method}"
+                validation.mkdir()
+                write_json(validation / "validation.json", {"valid": True})
+                quality = root / f"quality-v2-{method}"
+                quality.mkdir()
+                quality_report = quality / "quality.json"
+                write_json(quality_report, {
+                    "stage": "quality-sweep", "summaries": [{"alpha": 1.0}]})
+                write_json(quality / "complete.json", {
+                    "stage": "quality-sweep",
+                    "outputs": {"quality": file_entry(quality_report)},
+                })
+            matrix = build_matrix(root, blocks=5, repeats=5,
+                                  seed=20260924, reference="pq8")
+            self.assertEqual([item["name"] for item in matrix["methods"]],
+                             list(METHODS))
+            output = root / "matrix.json"
+            self.assertEqual(write_matrix(output, matrix), "created")
+            self.assertEqual(write_matrix(output, matrix), "reused")
 
 
 if __name__ == "__main__":
