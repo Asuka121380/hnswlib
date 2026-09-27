@@ -120,6 +120,12 @@ cmake --build "$HOME/IndividualProject/build/uq-batch-rotation" \
 The capability must report `"batch_rotation_engine":"blas_sgemv_sgemm"`. Then submit the
 paired OPQ/JQ batch-size sweep:
 
+If `find_package(BLAS)` cannot see the cluster's system libraries, locate the LP64 OpenBLAS
+shipped beside the Faiss wheel and reconfigure with
+`-DUQ_BLAS_LIBRARY=/absolute/path/to/libopenblas....so`. The exact-path option exists for
+non-standard wheel library names; the runner capability remains the authoritative admission
+check.
+
 ```bash
 scripts/edge_estimation/submit_batch_rotation_slurm.sh \
   --run-root "$HOME/IndividualProject/results/edge_estimation/RUN" \
