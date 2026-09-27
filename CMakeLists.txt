@@ -36,6 +36,7 @@ set(FAISS_INCLUDE_DIR "" CACHE PATH "Faiss source/install root containing faiss/
 set(FAISS_LIBRARY "" CACHE FILEPATH "Path to the Faiss CPU shared/static library")
 set(UQ_BLAS_LIBRARY "" CACHE FILEPATH
     "Exact BLAS library path for batch rotation (supports wheel-bundled OpenBLAS)")
+set(UQ_IVF_TEST_PYTHON "" CACHE FILEPATH "Optional Faiss/NumPy Python for the IVF integration CTest")
 
 if(HNSWLIB_ENABLE_V0_STRICT_FP_CONTRACT)
     target_compile_definitions(hnswlib INTERFACE HNSWLIB_V0_STRICT_FP_CONTRACT_ENABLED=1)
@@ -583,6 +584,15 @@ if(HNSWLIB_EXAMPLES)
         set_property(TARGET uq_opq_performance_runner PROPERTY CXX_STANDARD_REQUIRED ON)
         add_test(NAME uq_opq_performance_runner_help COMMAND uq_opq_performance_runner --help)
 
+        add_executable(uq_ivf_performance_runner examples/cpp/uq_ivf_performance_runner.cpp)
+        target_link_libraries(uq_ivf_performance_runner hnswlib)
+        if(WIN32)
+          target_link_libraries(uq_ivf_performance_runner psapi)
+        endif()
+        set_property(TARGET uq_ivf_performance_runner PROPERTY CXX_STANDARD 17)
+        set_property(TARGET uq_ivf_performance_runner PROPERTY CXX_STANDARD_REQUIRED ON)
+        add_test(NAME uq_ivf_performance_runner_help COMMAND uq_ivf_performance_runner --help)
+
         add_executable(uq_active_pruner_test tests/cpp/uq_active_pruner_test.cpp)
         target_link_libraries(uq_active_pruner_test hnswlib)
         set_property(TARGET uq_active_pruner_test PROPERTY CXX_STANDARD 17)
@@ -600,6 +610,8 @@ if(HNSWLIB_EXAMPLES)
           target_compile_definitions(
             uq_opq_performance_runner PRIVATE UQ_EDGE_ESTIMATION_HAVE_BLAS=1)
           target_link_libraries(uq_opq_performance_runner ${BLAS_LIBRARIES})
+          target_compile_definitions(uq_ivf_performance_runner PRIVATE UQ_EDGE_ESTIMATION_HAVE_BLAS=1)
+          target_link_libraries(uq_ivf_performance_runner ${BLAS_LIBRARIES})
         endif()
       endif()
 
@@ -625,6 +637,12 @@ if(HNSWLIB_EXAMPLES)
         target_link_libraries(uq_capture_fixture hnswlib)
         set_property(TARGET uq_capture_fixture PROPERTY CXX_STANDARD 17)
         set_property(TARGET uq_capture_fixture PROPERTY CXX_STANDARD_REQUIRED ON)
+        if(UQ_IVF_TEST_PYTHON AND TARGET uq_ivf_performance_runner)
+          add_test(NAME uq_ivf_integration_test
+            COMMAND ${UQ_IVF_TEST_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tests/python/uq_ivf_integration_test.py
+                    --build $<TARGET_FILE_DIR:uq_ivf_performance_runner>)
+          set_tests_properties(uq_ivf_integration_test PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        endif()
         if(PYTHON_EXECUTABLE)
           add_test(
             NAME uq_end_to_end_fixture
@@ -658,6 +676,7 @@ if(HNSWLIB_EXAMPLES)
         endif()
         if(TARGET uq_opq_performance_runner)
           target_compile_options(uq_opq_performance_runner PRIVATE -std=c++17)
+          target_compile_options(uq_ivf_performance_runner PRIVATE -std=c++17)
           target_compile_options(uq_active_pruner_test PRIVATE -std=c++17)
         endif()
       endif()

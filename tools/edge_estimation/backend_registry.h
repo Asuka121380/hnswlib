@@ -14,7 +14,8 @@ enum class BackendKind {
     Prq,
     Jq,
     RaBitQ,
-    Saq
+    Saq,
+    IvfPq, IvfOpq, IvfPqQjl
 };
 
 struct BackendCapability {
@@ -31,6 +32,12 @@ struct BackendCapability {
 };
 
 inline BackendCapability resolveBackend(const std::string& name) {
+    if (name == "ivf_pq") return BackendCapability{BackendKind::IvfPq, "ivf_pq", true, true, false,
+        true, true, true, false, "coarse-residual edge codec; artifact-specific validation required"};
+    if (name == "ivf_opq") return BackendCapability{BackendKind::IvfOpq, "ivf_opq", true, true, false,
+        true, true, true, false, "coarse-residual edge codec; artifact-specific validation required"};
+    if (name == "ivf_pq_qjl") return BackendCapability{BackendKind::IvfPqQjl, "ivf_pq_qjl", true, true, false,
+        true, true, true, false, "coarse-residual edge codec; artifact-specific validation required"};
     if (name == "pq_packed")
         return BackendCapability{BackendKind::PqPacked, "pq_packed", true, true, false,
                                  true, true, true, false, "formal validation is artifact-specific"};
@@ -67,7 +74,7 @@ inline BackendCapability resolveBackend(const std::string& name) {
 
 inline std::vector<BackendCapability> allBackendCapabilities() {
     const char* names[] = {"pq_packed", "pq_legacy", "pq_qjl_legacy", "opq",
-                           "prq", "jq", "rabitq", "saq"};
+                           "prq", "jq", "rabitq", "saq", "ivf_pq", "ivf_opq", "ivf_pq_qjl"};
     std::vector<BackendCapability> result;
     for (const char* name : names) result.push_back(resolveBackend(name));
     return result;

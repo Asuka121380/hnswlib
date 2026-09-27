@@ -1,0 +1,67 @@
+{
+  "date": "2026-09-27",
+  "formal_gist_experiments_run": false,
+  "native_regression_passed": 12,
+  "python_regression_passed": 26,
+  "integration_ctest_passed": true,
+  "training_oracle": {
+    "pq": {
+      "count": 259,
+      "max_absolute_error": 7.74987306328967e-07,
+      "batch_parity_valid": true
+    },
+    "opq": {
+      "count": 259,
+      "max_absolute_error": 1.0229023246211e-06,
+      "batch_parity_valid": true
+    },
+    "pq_qjl": {
+      "count": 259,
+      "max_absolute_error": 7.766054395119681e-07,
+      "batch_parity_valid": true
+    }
+  },
+  "dimension960_blas": {
+    "max_errors": {
+      "pq": 1.9806606132988236e-08,
+      "opq": 4.198857794790456e-08,
+      "pq_qjl": 2.0223170693611792e-07
+    },
+    "dimension": 960,
+    "m": 32,
+    "nbits": 8,
+    "qjl_bits": 128,
+    "zero_edge_fallback": true
+  },
+  "dimension960_scalar": {
+    "max_errors": {
+      "pq": 3.141166970976883e-08,
+      "opq": 5.152359605631318e-08,
+      "pq_qjl": 1.091932443131327e-06
+    },
+    "dimension": 960,
+    "m": 32,
+    "nbits": 8,
+    "qjl_bits": 128,
+    "zero_edge_fallback": true
+  },
+  "rejection_tests": {
+    "truncation_rejected": true,
+    "config_and_wrong_catalog_rejected": true,
+    "changed_mapping_rejected": true,
+    "calibration_overlap_rejected": true
+  },
+  "pipeline": {
+    "quality": true,
+    "grid_points": 7,
+    "summary": true
+  },
+  "source_sha256": {
+    "scripts/edge_estimation/ivf_train.py": "a2b5fac5a112f28d7d8c12b5008a9239c0ccde38674ba0c8686738783d045b09",
+    "scripts/edge_estimation/ivf_experiments.py": "622eb688a4cad0ce880d70c4e78a2bfe8981110fd289c7c1dbe29daaf5167ceb",
+    "tools/edge_estimation/backends/ivf_edge.h": "c180601fac2c6880a49308c2e883a18dbe9174764431f9bbc018ff8ec5527d56",
+    "examples/cpp/uq_ivf_performance_runner.cpp": "6c22896180e75a2f9a6fff6a173bffaf64b1c3b8f27298796e0e72d2062cfa5d",
+    "tests/python/uq_ivf_integration_test.py": "3693f4fae121900fe9f988f096c7d8459f7fc89a9e37254ff5f148e6a2730387",
+    "tests/python/uq_ivf_dimension_oracle.py": "9874b556962a15c94591867311dd32d5ca8c08731595a2e6513b0555e9ff0898"
+  }
+}

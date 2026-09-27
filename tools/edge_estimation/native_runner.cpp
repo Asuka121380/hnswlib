@@ -55,6 +55,7 @@ void usage() {
               << "  uq_native_runner capabilities\n"
               << "  uq_native_runner validate EVENTS [LABELS RANGES]\n"
               << "  uq_native_runner validate-artifact ARTIFACT EVENTS QUERIES\n"
+              << "  uq_native_runner scores-artifact ARTIFACT EVENTS QUERIES\n"
               << "  uq_native_runner validate-batch-artifact ARTIFACT EVENTS QUERIES BATCH_SIZE [ABS_TOL REL_TOL]\n"
               << "  uq_native_runner quality EVENTS LABELS ARTIFACT QUERIES ALPHA\n"
               << "  uq_native_runner bench-artifact EVENTS ARTIFACT QUERIES [REPEATS]\n"
@@ -127,6 +128,23 @@ int run(int argc, char** argv) {
                   << ",\"label_count\":" << label_count
                   << ",\"query_count\":" << range_count << "}\n";
         return 0;
+    }
+    if (command == "scores-artifact") {
+        if (argc != 5) { usage(); return 2; }
+        uq::Header header;
+        const auto events = uq::readEvents(argv[3], &header);
+        auto queries = std::make_shared<uq::QueryStore>(argv[4], header.dimension);
+        return uq::withArtifactKernel(argv[2], queries, header,
+            [&](auto& kernel, const uq::ArtifactDescriptor&) {
+                std::cout << "event_id,estimate\n" << std::setprecision(17);
+                for (const auto& event : events) {
+                    if (event.kind == uq::EventKind::QueryBegin) kernel.prepareQuery(event.query_id);
+                    else if (event.kind == uq::EventKind::SourceBegin) kernel.prepareSource(event);
+                    else if (event.kind == uq::EventKind::Candidate)
+                        std::cout << event.event_id << ',' << kernel.score(event) << '\n';
+                }
+                return 0;
+            });
     }
     if (command == "validate-artifact") {
         if (argc != 5) { usage(); return 2; }

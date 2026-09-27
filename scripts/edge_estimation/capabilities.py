@@ -8,6 +8,11 @@ from typing import Any
 def backend_capabilities() -> list[dict[str, Any]]:
     faiss = importlib.util.find_spec("faiss") is not None
     return [
+        *[{"name": name, "trainer_available": faiss,
+           "trainer_providers": ["faiss"] if faiss else [], "artifact_supported": True,
+           "entrypoint": "scripts/edge_estimation/ivf_train.py",
+           "reason": "requires a shared coarse edge bundle and artifact-specific validation"}
+          for name in ("ivf_pq", "ivf_opq", "ivf_pq_qjl")],
         {"name": "pq_packed", "trainer_available": True,
          "trainer_providers": ["numpy_reference"] + (["faiss"] if faiss else []),
          "artifact_supported": True},

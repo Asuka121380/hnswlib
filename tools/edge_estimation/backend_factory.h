@@ -10,6 +10,7 @@
 #include "backends/prq.h"
 #include "backends/rabitq_adapter.h"
 #include "backends/rotated_pq.h"
+#include "backends/ivf_edge.h"
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
 #include "backends/pq_legacy.h"
 #endif
@@ -21,7 +22,7 @@
 
 namespace uq {
 
-enum class ArtifactBackendKind { PqPacked, RotatedPq, Prq, RaBitQ,
+enum class ArtifactBackendKind { PqPacked, RotatedPq, IvfEdge, Prq, RaBitQ,
                                  PqLegacy, PqQjlLegacy };
 
 struct ArtifactDescriptor {
@@ -34,6 +35,8 @@ inline ArtifactDescriptor inspectArtifact(const std::filesystem::path& root) {
     const std::map<std::string, std::string> config = readNativeConfig(root / "native.cfg");
     const auto format = config.find("format");
     if (format == config.end()) throw std::runtime_error("artifact format is missing");
+    if (format->second == "uq-ivf-edge/1")
+        return ArtifactDescriptor{ArtifactBackendKind::IvfEdge, config.at("backend"), format->second};
     if (format->second == "uq-pq-packed/1")
         return ArtifactDescriptor{ArtifactBackendKind::PqPacked, "pq_packed", format->second};
     if (format->second == "uq-rotated-pq/1") {
@@ -72,6 +75,10 @@ decltype(auto) withArtifactKernel(const std::filesystem::path& root,
                                   Callback&& callback) {
     const ArtifactDescriptor descriptor = inspectArtifact(root);
     switch (descriptor.kind) {
+        case ArtifactBackendKind::IvfEdge: {
+            IvfEdgeArtifactKernel kernel(root, std::move(queries), event_header);
+            return std::forward<Callback>(callback)(kernel, descriptor);
+        }
         case ArtifactBackendKind::PqPacked: {
             PackedPqArtifactKernel kernel(root, std::move(queries), event_header);
             return std::forward<Callback>(callback)(kernel, descriptor);

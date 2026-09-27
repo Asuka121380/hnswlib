@@ -21,9 +21,10 @@ struct LiveOpqMetrics {
 
 // Bridges a full-graph rotated-PQ artifact into the generic HNSW active hook.
 // Invalid/mismatched estimates always fail open to the exact distance path.
-class LiveOpqPruner : public hnswlib::edge_estimation::ActiveEdgePruner {
+template <typename Kernel>
+class LiveArtifactPruner : public hnswlib::edge_estimation::ActiveEdgePruner {
  public:
-    LiveOpqPruner(RotatedPqArtifactKernel& kernel,
+    LiveArtifactPruner(Kernel& kernel,
                   const hnswlib::edge_estimation::EdgeCatalog& catalog,
                   double beta)
         : kernel_(kernel), catalog_(catalog), policy_(beta) {}
@@ -82,11 +83,13 @@ class LiveOpqPruner : public hnswlib::edge_estimation::ActiveEdgePruner {
     }
 
  private:
-    RotatedPqArtifactKernel& kernel_;
+    Kernel& kernel_;
     const hnswlib::edge_estimation::EdgeCatalog& catalog_;
     hnswlib::edge_estimation::ScaledThresholdPolicy policy_;
     uint64_t current_query_id_ = 0U;
     LiveOpqMetrics metrics_;
 };
+
+using LiveOpqPruner = LiveArtifactPruner<RotatedPqArtifactKernel>;
 
 }  // namespace uq
