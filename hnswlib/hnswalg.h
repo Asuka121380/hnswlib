@@ -16,6 +16,9 @@
 #ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE
 #include "edge_estimation/observer.h"
 #endif
+#ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_ACTIVE
+#include "edge_estimation/active_policy.h"
+#endif
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
 #include "edge_quant_v0.h"
 #include "edge_quant_v0_io.h"
@@ -535,6 +538,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         edge_estimation::CaptureObserver* uq_capture_observer =
             edge_estimation::activeCaptureObserver();
 #endif
+#ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_ACTIVE
+        edge_estimation::ActiveEdgePruner* uq_active_pruner =
+            edge_estimation::activeEdgePruner();
+#endif
 #ifdef HNSWLIB_ENABLE_EDGE_QUANT_V0
         if (use_edge_quant_v0 && v0_collect_metrics &&
             v0_metrics == nullptr) {
@@ -801,6 +808,28 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 }
 #endif
                 if (!v0_candidate_exact_visited) {
+#ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_ACTIVE
+                    if (uq_active_pruner != nullptr) {
+                        edge_estimation::ActivePruneRequest request;
+#ifdef HNSWLIB_ENABLE_V0_SHADOW_VALIDATION
+                        request.query_id = v0_query_id;
+#endif
+                        request.source_id = static_cast<uint32_t>(current_node_id);
+                        request.target_id = static_cast<uint32_t>(candidate_id);
+                        request.neighbor_slot = static_cast<uint32_t>(j - 1U);
+                        request.source_degree = static_cast<uint32_t>(size);
+                        request.d_current = static_cast<double>(candidate_dist);
+                        request.threshold_valid = top_candidates.size() >= ef;
+                        request.threshold = request.threshold_valid ?
+                            static_cast<double>(lowerBound) : 0.0;
+                        const edge_estimation::PolicyDecision decision =
+                            uq_active_pruner->evaluate(request);
+                        if (decision.prune) {
+                            visited_array[candidate_id] = visited_array_tag;
+                            continue;
+                        }
+                    }
+#endif
 #ifdef HNSWLIB_ENABLE_V0_RESIDUAL_REAL_PRUNING
                     if (v0_residual_config != nullptr &&
                         top_candidates.size() >= ef) {

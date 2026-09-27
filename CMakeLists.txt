@@ -27,6 +27,7 @@ option(HNSWLIB_ENABLE_NATIVE_ARCH "Compile examples for the build host CPU with 
 option(HNSWLIB_BUILD_FAISS_PQ_TOOLS "Build Faiss-based offline V0 PQ tools." OFF)
 option(HNSWLIB_BUILD_EDGE_ESTIMATION_TOOLS "Build unified edge-estimation tools and tests." OFF)
 option(HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE "Enable the unified layer-0 capture observer hook." OFF)
+option(HNSWLIB_ENABLE_EDGE_ESTIMATION_ACTIVE "Enable the unified layer-0 active pruning hook." OFF)
 option(UQ_WITH_BLAS "Use BLAS SGEMV/SGEMM for batch query rotation and LUT construction." ON)
 option(UQ_WITH_FAISS "Enable Faiss-backed unified estimators." OFF)
 option(UQ_WITH_RABITQ "Enable the optional RaBitQ adapter." OFF)
@@ -87,6 +88,9 @@ endif()
 
 if(HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE)
     target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE=1)
+endif()
+if(HNSWLIB_ENABLE_EDGE_ESTIMATION_ACTIVE)
+    target_compile_definitions(hnswlib INTERFACE HNSWLIB_ENABLE_EDGE_ESTIMATION_ACTIVE=1)
 endif()
 
 if(HNSWLIB_ENABLE_EDGE_QUANT_V0 AND HNSWLIB_ENABLE_V0_STRICT_FP_CONTRACT)
@@ -554,11 +558,37 @@ if(HNSWLIB_EXAMPLES)
       set_property(TARGET uq_query_store_test PROPERTY CXX_STANDARD_REQUIRED ON)
       add_test(NAME uq_query_store_test COMMAND uq_query_store_test)
 
+      if(PYTHON_EXECUTABLE)
+        add_test(
+          NAME uq_recall_qps_grid_test
+          COMMAND ${PYTHON_EXECUTABLE}
+                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/python/uq_recall_qps_grid_test.py
+        )
+        set_tests_properties(
+          uq_recall_qps_grid_test
+          PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        )
+      endif()
+
       add_executable(uq_rotated_pq_test tests/cpp/uq_rotated_pq_test.cpp)
       target_link_libraries(uq_rotated_pq_test hnswlib)
       set_property(TARGET uq_rotated_pq_test PROPERTY CXX_STANDARD 17)
       set_property(TARGET uq_rotated_pq_test PROPERTY CXX_STANDARD_REQUIRED ON)
       add_test(NAME uq_rotated_pq_test COMMAND uq_rotated_pq_test)
+
+      if(HNSWLIB_ENABLE_EDGE_ESTIMATION_ACTIVE AND HNSWLIB_ENABLE_EDGE_QUANT_V0)
+        add_executable(uq_opq_performance_runner examples/cpp/uq_opq_performance_runner.cpp)
+        target_link_libraries(uq_opq_performance_runner hnswlib)
+        set_property(TARGET uq_opq_performance_runner PROPERTY CXX_STANDARD 17)
+        set_property(TARGET uq_opq_performance_runner PROPERTY CXX_STANDARD_REQUIRED ON)
+        add_test(NAME uq_opq_performance_runner_help COMMAND uq_opq_performance_runner --help)
+
+        add_executable(uq_active_pruner_test tests/cpp/uq_active_pruner_test.cpp)
+        target_link_libraries(uq_active_pruner_test hnswlib)
+        set_property(TARGET uq_active_pruner_test PROPERTY CXX_STANDARD 17)
+        set_property(TARGET uq_active_pruner_test PROPERTY CXX_STANDARD_REQUIRED ON)
+        add_test(NAME uq_active_pruner_test COMMAND uq_active_pruner_test)
+      endif()
 
       if(UQ_WITH_BLAS AND BLAS_FOUND)
         foreach(uq_blas_target uq_native_runner uq_rotated_pq_test)
@@ -566,6 +596,11 @@ if(HNSWLIB_EXAMPLES)
             ${uq_blas_target} PRIVATE UQ_EDGE_ESTIMATION_HAVE_BLAS=1)
           target_link_libraries(${uq_blas_target} ${BLAS_LIBRARIES})
         endforeach()
+        if(TARGET uq_opq_performance_runner)
+          target_compile_definitions(
+            uq_opq_performance_runner PRIVATE UQ_EDGE_ESTIMATION_HAVE_BLAS=1)
+          target_link_libraries(uq_opq_performance_runner ${BLAS_LIBRARIES})
+        endif()
       endif()
 
       if(HNSWLIB_ENABLE_EDGE_QUANT_V0 AND HNSWLIB_ENABLE_V0_RESIDUAL_ESTIMATOR)
@@ -620,6 +655,10 @@ if(HNSWLIB_EXAMPLES)
         endif()
         if(TARGET uq_legacy_adapter_compile_test)
           target_compile_options(uq_legacy_adapter_compile_test PRIVATE -std=c++17)
+        endif()
+        if(TARGET uq_opq_performance_runner)
+          target_compile_options(uq_opq_performance_runner PRIVATE -std=c++17)
+          target_compile_options(uq_active_pruner_test PRIVATE -std=c++17)
         endif()
       endif()
     endif()

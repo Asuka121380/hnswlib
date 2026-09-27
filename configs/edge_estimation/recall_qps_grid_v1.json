@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "purpose": "pilot end-to-end Recall@10-QPS grid",
+  "dimension": 960,
+  "k": 10,
+  "query_start": 0,
+  "query_count": 1000,
+  "warmup_queries": 100,
+  "repeats": 1,
+  "opq_batch_size": 128,
+  "methods": {
+    "hnsw": {
+      "ef_search": [200, 275, 350, 425, 500, 600, 750]
+    },
+    "pq8": {
+      "beta": [1.45, 1.50, 1.60],
+      "ef_search": [250, 325, 400, 475, 575, 700, 800]
+    },
+    "pq_qjl": {
+      "beta": [1.04, 1.08, 1.12],
+      "ef_search": [250, 350, 425, 500, 600, 700, 800]
+    },
+    "opq": {
+      "beta": [1.30, 1.35, 1.40],
+      "ef_search": [250, 325, 400, 500, 600, 700, 800]
+    }
+  }
+}

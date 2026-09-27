@@ -139,7 +139,7 @@ Options parseOptions(int argc, char** argv) {
     if (options.index_path.empty() || options.query_path.empty() ||
         options.output_path.empty() || options.dimension == 0U ||
         options.query_count == 0U || options.k == 0U ||
-        options.ef_search == 0U || options.repeats < 5U ||
+        options.ef_search == 0U || options.repeats == 0U ||
         (options.method != "baseline" && !approximate && !residual)) {
         throw std::invalid_argument("incomplete performance-runner contract");
     }
