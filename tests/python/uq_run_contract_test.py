@@ -160,6 +160,14 @@ class RunContractTest(unittest.TestCase):
                                   seed=20260924, reference="pq8")
             self.assertEqual([item["name"] for item in matrix["methods"]],
                              list(METHODS))
+            batch_matrix = build_matrix(
+                root, blocks=3, repeats=3, seed=20260927,
+                reference="opq", method_names=("opq", "jq"))
+            self.assertEqual([item["name"] for item in batch_matrix["methods"]],
+                             ["opq", "jq"])
+            with self.assertRaisesRegex(ValueError, "reference must be included"):
+                build_matrix(root, blocks=1, repeats=1, seed=1,
+                             reference="pq8", method_names=("opq", "jq"))
             output = root / "matrix.json"
             self.assertEqual(write_matrix(output, matrix), "created")
             self.assertEqual(write_matrix(output, matrix), "reused")

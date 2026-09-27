@@ -34,6 +34,20 @@ class Kernel {
     uint64_t query_calls, source_calls;
 };
 
+class BatchKernel : public Kernel {
+ public:
+    BatchKernel() : batch_calls(0), last_batch_size(0), prepared_queries(0) {}
+    void prepareQueryBatch(const std::vector<uint64_t>& ids, size_t batch_size) {
+        ++batch_calls;
+        last_batch_size = batch_size;
+        prepared_queries = ids.size();
+    }
+    const char* batchPreparationEngine() const { return "test_batch"; }
+    uint64_t batch_calls;
+    size_t last_batch_size;
+    size_t prepared_queries;
+};
+
 class PackedKernel {
  public:
     PackedKernel() : model_(3U, 4U), query_calls(0), source_calls(0) {
@@ -108,6 +122,23 @@ int main() {
         throw std::runtime_error("timing lifecycle count mismatch");
     if (timing_kernel.source_calls != 2U)
         throw std::runtime_error("empty source was prepared");
+    BatchKernel batch_kernel;
+    const uq::ReplayCounters batch_timing =
+        uq::replayBatchPreparedEstimator(events, batch_kernel, 2U, 8U);
+    if (batch_timing.query_count != 2U || batch_timing.source_count != 2U ||
+        batch_timing.eligible_count != 6U || batch_timing.fallback_count != 2U ||
+        batch_kernel.batch_calls != 2U || batch_kernel.last_batch_size != 8U ||
+        batch_kernel.prepared_queries != 1U ||
+        uq::batchPreparationEngine(batch_kernel) != "test_batch")
+        throw std::runtime_error("batch-prepared evaluator lifecycle mismatch");
+    BatchKernel parity_kernel;
+    const uq::BatchParityReport parity = uq::compareScalarAndBatchEstimator(
+        events, parity_kernel, 8U, 0.0, 0.0);
+    if (!parity.valid() || parity.compared_count != 2U ||
+        parity.nonfinite_mismatch_count != 0U ||
+        parity.tolerance_failure_count != 0U ||
+        parity.max_absolute_error != 0.0)
+        throw std::runtime_error("batch parity evaluator mismatch");
     PackedKernel packed_kernel;
     const uq::ReplayCounters packed_timing =
         uq::replayOrderedEstimator(events, packed_kernel, 1U);

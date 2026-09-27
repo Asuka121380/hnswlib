@@ -4,6 +4,7 @@
 #include <fstream>
 #include <memory>
 #include <stdexcept>
+#include <vector>
 
 #include "tools/edge_estimation/backends/rotated_pq.h"
 #include "tools/edge_estimation/event_format.h"
@@ -35,9 +36,11 @@ int main() {
     {
         std::ofstream queries(queries_path, std::ios::binary | std::ios::trunc);
         const uint32_t dimension = 2U;
-        const float query[] = {2.0f, 3.0f};
+        const float query[] = {2.0f, 3.0f, 4.0f, 1.0f};
         queries.write(reinterpret_cast<const char*>(&dimension), 4);
         queries.write(reinterpret_cast<const char*>(query), 8);
+        queries.write(reinterpret_cast<const char*>(&dimension), 4);
+        queries.write(reinterpret_cast<const char*>(query + 2), 8);
     }
     std::ofstream config(root / "native.cfg", std::ios::trunc);
     config << "format=uq-rotated-pq/1\nbackend=opq\nimplementation=test\nprovider=test\n"
@@ -65,6 +68,24 @@ int main() {
         const double score = kernel.score(event);
         if (std::fabs(score - 5.0) > 1e-6)
             throw std::runtime_error("rotated-PQ score used the wrong matrix orientation");
+        kernel.prepareQuery(1U);
+        event.query_id = 1U;
+        const double scalar_second = kernel.score(event);
+        if (std::fabs(scalar_second - 9.0) > 1e-6)
+            throw std::runtime_error("rotated-PQ scalar second-query score mismatch");
+
+        kernel.prepareQueryBatch(std::vector<uint64_t>{0U, 1U}, 2U);
+        kernel.prepareQuery(0U);
+        event.query_id = 0U;
+        const double batch_first = kernel.score(event);
+        kernel.prepareQuery(1U);
+        event.query_id = 1U;
+        const double batch_second = kernel.score(event);
+        if (std::fabs(batch_first - score) > 1e-5 ||
+            std::fabs(batch_second - scalar_second) > 1e-5)
+            throw std::runtime_error("batch rotation/LUT differs from scalar path");
+        if (kernel.preparedQueryCount() != 2U || kernel.preparedBatchSize() != 2U)
+            throw std::runtime_error("batch preparation metadata mismatch");
     }
     std::filesystem::remove(queries_path);
     std::filesystem::remove_all(root);

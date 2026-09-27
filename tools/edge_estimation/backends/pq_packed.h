@@ -44,7 +44,15 @@ class PackedPqModel {
         const std::vector<float>& lut,
         const uint8_t* packed,
         size_t packed_size) const {
-        if (lut.size() != static_cast<size_t>(m_) * ksub_)
+        return estimate(lut.data(), lut.size(), packed, packed_size);
+    }
+
+    hnswlib::edge_estimation::DotEstimate estimate(
+        const float* lut,
+        size_t lut_size,
+        const uint8_t* packed,
+        size_t packed_size) const {
+        if (lut == NULL || lut_size != static_cast<size_t>(m_) * ksub_)
             return hnswlib::edge_estimation::DotEstimate(
                 0.0, hnswlib::edge_estimation::EstimateStatus::UnsupportedRecord);
         float sum = 0.0f;

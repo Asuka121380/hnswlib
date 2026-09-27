@@ -343,6 +343,8 @@ def _timing_evidence(validation_path: str | None, quality_path: str | None,
 
 
 def bench(args: argparse.Namespace) -> int:
+    if args.query_batch_size is not None and args.query_batch_size <= 0:
+        raise ValueError("--query-batch-size must be positive")
     if args.matrix:
         if not args.queries:
             raise ValueError("matrix benchmark requires --queries")
@@ -352,6 +354,9 @@ def bench(args: argparse.Namespace) -> int:
                 not methods):
             raise ValueError("invalid timing matrix")
         names = [str(item["name"]) for item in methods]
+        if args.query_batch_size is not None and any(
+                name not in {"opq", "jq"} for name in names):
+            raise ValueError("batch query preparation is currently supported only for opq and jq")
         artifacts = {str(item["name"]): str(Path(item["artifact"]).resolve())
                      for item in methods}
         method_evidence = {
@@ -368,21 +373,39 @@ def bench(args: argparse.Namespace) -> int:
         build_id = sha256_file(args.runner)
         records = []
         for slot in paired_schedule(names, blocks, repeats, seed):
-            command = [str(Path(args.runner).resolve()), "bench-artifact",
-                       str(Path(args.events).resolve()), artifacts[str(slot["method"])],
-                       str(Path(args.queries).resolve()), "1"]
+            if args.query_batch_size is None:
+                command = [str(Path(args.runner).resolve()), "bench-artifact",
+                           str(Path(args.events).resolve()), artifacts[str(slot["method"])],
+                           str(Path(args.queries).resolve()), "1"]
+            else:
+                command = [str(Path(args.runner).resolve()), "bench-batch-artifact",
+                           str(Path(args.events).resolve()), artifacts[str(slot["method"])],
+                           str(Path(args.queries).resolve()),
+                           str(args.query_batch_size), "1"]
             value = json.loads(subprocess.run(command, check=True, text=True,
                                               capture_output=True).stdout)
+            isa_profile = str(matrix.get("isa_profile", "portable"))
+            if args.query_batch_size is not None:
+                isa_profile += ":" + str(value["batch_rotation_engine"])
             records.append({**slot, "elapsed_ns": value["raw_elapsed_ns"][0],
                             "query_count": value["query_count"],
                             "eligible_events": value["eligible_events"],
                             "dataset_id": dataset_id, "build_id": build_id,
                             "mode": value["mode"], "thread_count": 1,
-                            "isa_profile": matrix.get("isa_profile", "portable"),
+                            "isa_profile": isa_profile,
                             "checksum": value["checksum"],
+                            **({"query_batch_size": value["query_batch_size"],
+                                "prepared_query_count": value["prepared_query_count"],
+                                "batch_rotation_engine": value["batch_rotation_engine"]}
+                               if args.query_batch_size is not None else {}),
                             "memory_report": value["memory_report"],
                             "evidence": method_evidence[str(slot["method"])]})
-        result = {"schema_version": 1, "mode": "randomized_paired_blocks",
+        result = {"schema_version": 1,
+                  "mode": ("randomized_paired_batch_blocks"
+                           if args.query_batch_size is not None
+                           else "randomized_paired_blocks"),
+                  **({"query_batch_size": args.query_batch_size}
+                     if args.query_batch_size is not None else {}),
                   "raw_records": records,
                   "summary": summarize_paired(records, reference),
                   "evidence": {"by_method": method_evidence,
@@ -399,10 +422,18 @@ def bench(args: argparse.Namespace) -> int:
     if args.artifact:
         if not args.queries:
             raise ValueError("artifact benchmark requires --queries")
-        command = [str(Path(args.runner).resolve()), "bench-artifact",
-                   str(Path(args.events).resolve()), str(Path(args.artifact).resolve()),
-                   str(Path(args.queries).resolve()), str(args.repeats)]
+        if args.query_batch_size is None:
+            command = [str(Path(args.runner).resolve()), "bench-artifact",
+                       str(Path(args.events).resolve()), str(Path(args.artifact).resolve()),
+                       str(Path(args.queries).resolve()), str(args.repeats)]
+        else:
+            command = [str(Path(args.runner).resolve()), "bench-batch-artifact",
+                       str(Path(args.events).resolve()), str(Path(args.artifact).resolve()),
+                       str(Path(args.queries).resolve()), str(args.query_batch_size),
+                       str(args.repeats)]
     else:
+        if args.query_batch_size is not None:
+            raise ValueError("--query-batch-size requires --artifact or --matrix")
         command = [str(Path(args.runner).resolve()), "bench",
                    str(Path(args.events).resolve()), str(args.repeats)]
     completed = subprocess.run(command, check=True, text=True,
@@ -584,6 +615,7 @@ def parser() -> argparse.ArgumentParser:
     timing.add_argument("--validation")
     timing.add_argument("--quality-report")
     timing.add_argument("--formal", action="store_true")
+    timing.add_argument("--query-batch-size", type=int)
     timing.add_argument("--out", required=True)
     timing.add_argument("--ledger")
     timing.set_defaults(function=bench)

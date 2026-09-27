@@ -103,3 +103,35 @@ paths, then runs five randomized blocks with five repeats per method.  PQ8 is th
 The default `4G` request is above the observed quality-sweep peak while avoiding the earlier `8G`
 queue bottleneck.  The immutable result is written to `timing-v2/{result,complete}.json`; cluster
 job elapsed time is not a substitute for the paired estimator measurements in `result.json`.
+
+OPQ and JQ additionally support a separate batch-query timing profile. Build a BLAS-enabled
+runner and verify that the capability is not the scalar fallback:
+
+```bash
+cmake -S . -B "$HOME/IndividualProject/build/uq-batch-rotation" -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DHNSWLIB_BUILD_EDGE_ESTIMATION_TOOLS=ON \
+  -DUQ_WITH_BLAS=ON
+cmake --build "$HOME/IndividualProject/build/uq-batch-rotation" \
+  --target uq_native_runner --parallel 4
+"$HOME/IndividualProject/build/uq-batch-rotation/uq_native_runner" capabilities
+```
+
+The capability must report `"batch_rotation_engine":"blas_sgemv_sgemm"`. Then submit the
+paired OPQ/JQ batch-size sweep:
+
+```bash
+scripts/edge_estimation/submit_batch_rotation_slurm.sh \
+  --run-root "$HOME/IndividualProject/results/edge_estimation/RUN" \
+  --account ACCOUNT --partition PARTITION --qos QOS
+```
+
+The default sizes are `1,8,32,128,600`. Each output is immutable under
+`timing-batch-bSIZE/`. Rotation and LUT construction are rebuilt inside every measured repeat;
+query-file I/O remains outside timing. This is a throughput profile and does not replace the
+single-query `timing-v2` latency profile. It deliberately remains a non-formal component profile:
+the attached scalar quality evidence identifies the same frozen artifacts, but is not presented as
+a fresh quality validation of BLAS accumulation order. Before each timing pair, the wrapper runs
+`validate-batch-artifact` over every eligible edge and writes
+`batch-parity-bSIZE-{opq,jq}.json`; any finite/non-finite mismatch or error beyond
+`1e-4 + 1e-5 * scale` stops the job.

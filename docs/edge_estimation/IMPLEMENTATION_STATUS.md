@@ -21,6 +21,12 @@ construction remain inside `prepareQuery`. Quality output contains aggregate con
 global one-sided error percentiles, and per-query counts/percentiles. Formal timing requires
 separate validation and quality report identities at the Python orchestration layer.
 
+OPQ and JQ also expose `bench-batch-artifact`. It packs the trace's unique queries, applies the
+dense rotation with BLAS SGEMV/SGEMM in configurable chunks, builds query-major PQ LUTs, and then
+replays the unchanged event order from cached LUTs. Batch preprocessing is inside the measured
+region. The original scalar `bench-artifact` path remains unchanged, and a portable scalar
+fallback is reported explicitly rather than being mislabeled as a BLAS batch run.
+
 Legacy PQ and PQ+QJL now have versioned artifact wrappers, sidecar/companion hash validation,
 stable source-slot/edge checks, query lifecycle wiring, and native dispatch when the corresponding
 V0 build options are enabled. `wrap-legacy` creates the wrapper artifact. Actual parity against the

@@ -55,8 +55,10 @@ void usage() {
               << "  uq_native_runner capabilities\n"
               << "  uq_native_runner validate EVENTS [LABELS RANGES]\n"
               << "  uq_native_runner validate-artifact ARTIFACT EVENTS QUERIES\n"
+              << "  uq_native_runner validate-batch-artifact ARTIFACT EVENTS QUERIES BATCH_SIZE [ABS_TOL REL_TOL]\n"
               << "  uq_native_runner quality EVENTS LABELS ARTIFACT QUERIES ALPHA\n"
               << "  uq_native_runner bench-artifact EVENTS ARTIFACT QUERIES [REPEATS]\n"
+              << "  uq_native_runner bench-batch-artifact EVENTS ARTIFACT QUERIES BATCH_SIZE [REPEATS]\n"
               << "  uq_native_runner quality-pq EVENTS LABELS ARTIFACT QUERIES ALPHA\n"
               << "  uq_native_runner bench-pq EVENTS ARTIFACT QUERIES [REPEATS]\n"
               << "  uq_native_runner bench EVENTS [REPEATS]\n";
@@ -75,6 +77,8 @@ int run(int argc, char** argv) {
         std::cout
             << "{\"schema_version\":1,\"event_schema\":\"UQEV0001\","
             << "\"numeric_profile\":\"reference\","
+            << "\"batch_rotation_engine\":\""
+            << uq::detail::batchRotationEngine() << "\","
             << "\"cpu\":{\"avx2\":" << (avx2 ? "true" : "false")
             << ",\"avx512f\":" << (avx512f ? "true" : "false") << "},"
 #ifdef HNSWLIB_ENABLE_EDGE_ESTIMATION_CAPTURE
@@ -141,6 +145,38 @@ int run(int argc, char** argv) {
                 return 0;
             });
     }
+    if (command == "validate-batch-artifact") {
+        if (argc != 6 && argc != 8) { usage(); return 2; }
+        const size_t batch_size = static_cast<size_t>(std::stoull(argv[5]));
+        const double absolute_tolerance = argc == 8 ? std::stod(argv[6]) : 1e-4;
+        const double relative_tolerance = argc == 8 ? std::stod(argv[7]) : 1e-5;
+        uq::Header header;
+        const std::vector<uq::EventRecord> events = uq::readEvents(argv[3], &header);
+        std::shared_ptr<const uq::QueryStore> queries =
+            std::make_shared<uq::QueryStore>(argv[4], header.dimension);
+        return uq::withArtifactKernel(argv[2], queries, header,
+            [&](auto& kernel, const uq::ArtifactDescriptor& descriptor) {
+                const uq::BatchParityReport report = uq::compareScalarAndBatchEstimator(
+                    events, kernel, batch_size, absolute_tolerance, relative_tolerance);
+                std::cout << "{\"schema_version\":1,\"valid\":"
+                          << (report.valid() ? "true" : "false")
+                          << ",\"backend\":\"" << descriptor.backend_name << "\""
+                          << ",\"batch_rotation_engine\":\""
+                          << uq::batchPreparationEngine(kernel) << "\""
+                          << ",\"query_batch_size\":" << batch_size
+                          << ",\"absolute_tolerance\":" << absolute_tolerance
+                          << ",\"relative_tolerance\":" << relative_tolerance
+                          << ",\"compared_count\":" << report.compared_count
+                          << ",\"nonfinite_mismatch_count\":"
+                          << report.nonfinite_mismatch_count
+                          << ",\"tolerance_failure_count\":"
+                          << report.tolerance_failure_count
+                          << ",\"max_absolute_error\":" << report.max_absolute_error
+                          << ",\"max_relative_error\":" << report.max_relative_error
+                          << "}\n";
+                return report.valid() ? 0 : 3;
+            });
+    }
     if (command == "quality" || command == "quality-pq") {
         if (argc != 7) { usage(); return 2; }
         uq::Header event_header, label_header;
@@ -180,6 +216,53 @@ int run(int argc, char** argv) {
                     std::cout << '}';
                 }
                 std::cout << "]}\n";
+                return 0;
+            });
+    }
+    if (command == "bench-batch-artifact") {
+        if (argc != 6 && argc != 7) { usage(); return 2; }
+        const size_t batch_size = static_cast<size_t>(std::stoull(argv[5]));
+        const size_t repeats = argc == 7 ? static_cast<size_t>(std::stoull(argv[6])) : 1U;
+        if (batch_size == 0U || repeats == 0U)
+            throw std::invalid_argument("batch size and repeats must be positive");
+        uq::Header header;
+        const std::vector<uq::EventRecord> events = uq::readEvents(argv[2], &header);
+        const size_t prepared_query_count = uq::orderedUniqueQueryIds(events).size();
+        std::shared_ptr<const uq::QueryStore> queries =
+            std::make_shared<uq::QueryStore>(argv[4], header.dimension);
+        return uq::withArtifactKernel(argv[3], queries, header,
+            [&](auto& kernel, const uq::ArtifactDescriptor& descriptor) {
+                (void)uq::replayBatchPreparedEstimator(events, kernel, 1U, batch_size);
+                std::vector<uq::ReplayCounters> runs;
+                for (size_t i = 0; i < repeats; ++i)
+                    runs.push_back(
+                        uq::replayBatchPreparedEstimator(events, kernel, 1U, batch_size));
+                std::cout << "{\"schema_version\":1,\"backend\":\""
+                          << descriptor.backend_name
+                          << "\",\"mode\":\"batch_prepared_ordered_estimator\","
+                          << "\"numeric_profile\":\"batch_rotation\","
+                          << "\"batch_rotation_engine\":\""
+                          << uq::batchPreparationEngine(kernel) << "\","
+                          << "\"query_batch_size\":" << batch_size << ','
+                          << "\"prepared_query_count\":" << prepared_query_count << ','
+                          << "\"quality_valid\":false,"
+                          << "\"formal_validation_passed\":false,"
+                          << "\"raw_elapsed_ns\":[";
+                for (size_t i = 0; i < runs.size(); ++i) {
+                    if (i) std::cout << ',';
+                    std::cout << runs[i].elapsed_ns;
+                }
+                const uq::ReplayCounters& value = runs.at(0);
+                std::cout << "],\"query_count\":" << value.query_count
+                          << ",\"source_setup_calls\":" << value.source_count
+                          << ",\"eligible_events\":" << value.eligible_count
+                          << ",\"fallback_count\":" << value.fallback_count
+                          << ",\"checksum\":" << value.checksum
+                          << ",\"memory_report\":{\"backend_bytes\":"
+                          << kernel.backendBytes()
+                          << ",\"query_store_bytes\":" << queries->bytes()
+                          << ",\"scratch_bytes\":" << kernel.scratchBytes()
+                          << ",\"peak_rss_bytes\":null}}\n";
                 return 0;
             });
     }

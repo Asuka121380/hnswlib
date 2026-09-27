@@ -20,13 +20,17 @@ METHODS = ("pq8", "pq4", "opq", "prq", "jq", "rabitq")
 
 
 def build_matrix(run_root: Path, *, blocks: int, repeats: int,
-                 seed: int, reference: str) -> dict[str, object]:
+                 seed: int, reference: str,
+                 method_names: Sequence[str] = METHODS) -> dict[str, object]:
     if blocks <= 0 or repeats <= 0:
         raise ValueError("blocks and repeats must be positive")
-    if reference not in METHODS:
-        raise ValueError(f"reference must be one of: {', '.join(METHODS)}")
+    if (not method_names or len(set(method_names)) != len(method_names) or
+            any(method not in METHODS for method in method_names)):
+        raise ValueError(f"methods must be unique members of: {', '.join(METHODS)}")
+    if reference not in method_names:
+        raise ValueError("reference must be included in methods")
     methods: list[dict[str, str]] = []
-    for method in METHODS:
+    for method in method_names:
         artifact = (run_root / f"artifact-{method}").resolve()
         validation = (run_root / f"validation-{method}" / "validation.json").resolve()
         quality = (run_root / f"quality-v2-{method}" / "quality.json").resolve()
@@ -103,14 +107,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--seed", type=int, default=20260924)
     parser.add_argument("--reference", choices=METHODS, default="pq8")
+    parser.add_argument("--methods", nargs="+", choices=METHODS,
+                        default=list(METHODS))
     args = parser.parse_args(argv)
     matrix = build_matrix(args.run_root.resolve(), blocks=args.blocks,
                           repeats=args.repeats, seed=args.seed,
-                          reference=args.reference)
+                          reference=args.reference, method_names=args.methods)
     status = write_matrix(args.out, matrix)
     print(json.dumps({"status": status, "out": str(args.out.resolve()),
-                      "method_count": len(METHODS),
-                      "record_count": args.blocks * args.repeats * len(METHODS)},
+                      "method_count": len(args.methods),
+                      "record_count": args.blocks * args.repeats * len(args.methods)},
                      sort_keys=True))
     return 0
 

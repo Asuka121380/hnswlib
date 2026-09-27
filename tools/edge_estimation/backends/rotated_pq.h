@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -10,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "batch_rotation.h"
 #include "pq_packed_artifact.h"
 #include "optional_backend.h"
 #include "hnswlib/edge_estimation/score_bridge.h"
@@ -26,7 +28,8 @@ class RotatedPqArtifactKernel {
         : queries_(std::move(queries)), config_(readNativeConfig(root / "native.cfg")),
           dimension_(number("dimension")), m_(number("m")), nbits_(number("nbits")),
           dsub_(number("dsub")), edge_count_(number64("edge_count")),
-          record_size_(number("record_size")), model_(m_, nbits_), current_query_(~uint64_t(0)) {
+          record_size_(number("record_size")), model_(m_, nbits_), current_query_(~uint64_t(0)),
+          current_lut_(nullptr), batch_prepared_(false) {
         require("format", "uq-rotated-pq/1");
         require("coverage", "full_graph");
         require("rotation_layout", "row_major_r_times_column");
@@ -59,6 +62,15 @@ class RotatedPqArtifactKernel {
     }
 
     void prepareQuery(uint64_t query_id) {
+        if (batch_prepared_) {
+            if (query_id >= batch_slot_by_query_.size() ||
+                batch_slot_by_query_[static_cast<size_t>(query_id)] == noBatchSlot())
+                throw std::runtime_error("query was not included in prepared batch");
+            const size_t slot = batch_slot_by_query_[static_cast<size_t>(query_id)];
+            current_lut_ = batch_luts_.data() + slot * lutSize();
+            current_query_ = query_id;
+            return;
+        }
         const float* query = queries_->query(query_id);
         rotated_query_.assign(dimension_, 0.0f);
         for (uint32_t row = 0; row < dimension_; ++row) {
@@ -78,8 +90,57 @@ class RotatedPqArtifactKernel {
                     sum += rotated_query_[sub * dsub_ + d] * codebook_[center + d];
                 lut_[static_cast<size_t>(sub) * model_.centroidCount() + code] = sum;
             }
+        current_lut_ = lut_.data();
         current_query_ = query_id;
     }
+
+    void prepareQueryBatch(const std::vector<uint64_t>& query_ids, size_t batch_size) {
+        if (query_ids.empty()) throw std::invalid_argument("query batch must not be empty");
+        if (batch_size == 0U) throw std::invalid_argument("query batch size must be positive");
+        batch_prepared_ = false;
+        current_query_ = ~uint64_t(0);
+        current_lut_ = nullptr;
+        batch_slot_by_query_.assign(static_cast<size_t>(queries_->count()), noBatchSlot());
+        for (size_t slot = 0; slot < query_ids.size(); ++slot) {
+            const uint64_t query_id = query_ids[slot];
+            (void)queries_->query(query_id);
+            size_t& destination = batch_slot_by_query_[static_cast<size_t>(query_id)];
+            if (destination != noBatchSlot())
+                throw std::invalid_argument("query batch contains duplicate ids");
+            destination = slot;
+        }
+        batch_luts_.assign(query_ids.size() * lutSize(), 0.0f);
+        const size_t effective_batch = std::min(batch_size, query_ids.size());
+        batch_queries_.resize(effective_batch * dimension_);
+        batch_rotated_queries_.resize(effective_batch * dimension_);
+        for (size_t begin = 0; begin < query_ids.size(); begin += effective_batch) {
+            const size_t count = std::min(effective_batch, query_ids.size() - begin);
+            for (size_t row = 0; row < count; ++row) {
+                const float* source = queries_->query(query_ids[begin + row]);
+                std::copy(source, source + dimension_,
+                          batch_queries_.begin() + row * dimension_);
+            }
+            detail::rotateQueryBatch(batch_queries_.data(), count, dimension_,
+                                     rotation_.data(), batch_rotated_queries_.data());
+            detail::buildPqInnerProductTablesBatch(
+                batch_rotated_queries_.data(), count, dimension_, m_,
+                model_.centroidCount(), dsub_, codebook_.data(),
+                batch_luts_.data() + begin * lutSize());
+        }
+        prepared_query_count_ = query_ids.size();
+        prepared_batch_size_ = effective_batch;
+        batch_prepared_ = true;
+    }
+
+    void clearPreparedQueryBatch() {
+        batch_prepared_ = false;
+        current_query_ = ~uint64_t(0);
+        current_lut_ = nullptr;
+    }
+
+    const char* batchPreparationEngine() const { return detail::batchRotationEngine(); }
+    size_t preparedQueryCount() const { return prepared_query_count_; }
+    size_t preparedBatchSize() const { return prepared_batch_size_; }
 
     void prepareSource(const EventRecord&) {}
 
@@ -92,7 +153,8 @@ class RotatedPqArtifactKernel {
         if (!(length > 0.0) || !std::isfinite(length) || !std::isfinite(anchor))
             return std::numeric_limits<double>::quiet_NaN();
         const hnswlib::edge_estimation::DotEstimate qdot =
-            model_.estimate(lut_, record + 16U, model_.packedCodeBytes());
+            model_.estimate(current_lut_, lutSize(), record + 16U,
+                            model_.packedCodeBytes());
         if (!qdot.valid()) return std::numeric_limits<double>::quiet_NaN();
         const hnswlib::edge_estimation::EdgeScore score =
             hnswlib::edge_estimation::bridgeDotToSquaredDistance(
@@ -106,7 +168,10 @@ class RotatedPqArtifactKernel {
         return static_cast<uint64_t>(codebook_.size() + rotation_.size()) * 4U + records_.size();
     }
     uint64_t scratchBytes() const {
-        return static_cast<uint64_t>(lut_.capacity() + rotated_query_.capacity()) * 4U;
+        return static_cast<uint64_t>(
+            lut_.capacity() + rotated_query_.capacity() + batch_luts_.capacity() +
+            batch_queries_.capacity() + batch_rotated_queries_.capacity()) * 4U +
+            static_cast<uint64_t>(batch_slot_by_query_.capacity()) * sizeof(size_t);
     }
 
  private:
@@ -117,6 +182,10 @@ class RotatedPqArtifactKernel {
     void require(const char* key, const char* value) const {
         if (config_.at(key) != value) throw std::runtime_error("unsupported artifact contract");
     }
+    size_t lutSize() const {
+        return static_cast<size_t>(m_) * model_.centroidCount();
+    }
+    static size_t noBatchSlot() { return std::numeric_limits<size_t>::max(); }
 
     std::shared_ptr<const QueryStore> queries_;
     std::map<std::string, std::string> config_;
@@ -125,7 +194,13 @@ class RotatedPqArtifactKernel {
     uint32_t record_size_;
     PackedPqModel model_;
     uint64_t current_query_;
+    const float* current_lut_;
+    bool batch_prepared_;
+    size_t prepared_query_count_ = 0U;
+    size_t prepared_batch_size_ = 0U;
     std::vector<float> codebook_, rotation_, rotated_query_, lut_;
+    std::vector<float> batch_queries_, batch_rotated_queries_, batch_luts_;
+    std::vector<size_t> batch_slot_by_query_;
     std::vector<uint8_t> records_;
 };
 
