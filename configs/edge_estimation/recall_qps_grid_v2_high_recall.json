@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "purpose": "supplemental high-recall end-to-end Recall@10-QPS grid",
+  "dimension": 960,
+  "k": 10,
+  "query_start": 0,
+  "query_count": 1000,
+  "warmup_queries": 100,
+  "repeats": 1,
+  "opq_batch_size": 128,
+  "methods": {
+    "hnsw": {
+      "ef_search": [850, 950, 1100]
+    },
+    "pq8": {
+      "beta": [1.50, 1.60],
+      "ef_search": [900, 1000, 1150]
+    },
+    "pq_qjl": {
+      "beta": [1.08, 1.12],
+      "ef_search": [900, 1000, 1150]
+    },
+    "opq": {
+      "beta": [1.35, 1.40],
+      "ef_search": [900, 1000, 1150]
+    }
+  }
+}
