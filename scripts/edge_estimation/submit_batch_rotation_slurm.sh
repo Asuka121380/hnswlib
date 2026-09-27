@@ -8,7 +8,10 @@ if [[ "${1:-}" == "--worker" ]]; then
     run_root="${UQ_RUN_ROOT:?}"
     queries="${UQ_QUERIES:?}"
     matrix="${UQ_BATCH_MATRIX:?}"
-    batch_sizes="${UQ_BATCH_SIZES:?}"
+    # Slurm parses commas in --export as environment-variable separators, so
+    # the submitter transports this CSV value with colons and restores it here.
+    batch_sizes="${UQ_BATCH_SIZES_ENCODED:?}"
+    batch_sizes="${batch_sizes//:/,}"
     export OMP_NUM_THREADS=1
     export OPENBLAS_NUM_THREADS=1
     export MKL_NUM_THREADS=1
@@ -161,6 +164,8 @@ matrix="$run_root/batch-rotation-matrix.json"
     --seed "$seed" \
     --reference opq
 
+batch_sizes_encoded="${batch_sizes//,/:}"
+
 job_id="$(sbatch --parsable \
     --account="$account" \
     --partition="$partition" \
@@ -173,7 +178,7 @@ job_id="$(sbatch --parsable \
     --job-name=uq-batch-rotation \
     --output="$run_root/logs/%x-%j.out" \
     --error="$run_root/logs/%x-%j.err" \
-    --export="ALL,UQ_RUN_ROOT=$run_root,UQ_REPO=$repo,UQ_PYTHON=$python,UQ_NATIVE_RUNNER=$runner,UQ_QUERIES=$queries,UQ_BATCH_MATRIX=$matrix,UQ_BATCH_SIZES=$batch_sizes" \
+    --export="ALL,UQ_RUN_ROOT=$run_root,UQ_REPO=$repo,UQ_PYTHON=$python,UQ_NATIVE_RUNNER=$runner,UQ_QUERIES=$queries,UQ_BATCH_MATRIX=$matrix,UQ_BATCH_SIZES_ENCODED=$batch_sizes_encoded" \
     "$script_path" --worker)"
 echo "batch_rotation_job_id=$job_id"
 echo "monitor: squeue -j $job_id"
