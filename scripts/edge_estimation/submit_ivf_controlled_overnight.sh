@@ -20,6 +20,9 @@ if [[ "${1:-}" == "--worker" ]]; then
     cmake="$HOME/IndividualProject/envs/v0-pq/bin/cmake"
     ninja="/opt/apps/eb/software/Ninja/1.10.2-GCCcore-10.3.0/bin/ninja"
     blas="$HOME/IndividualProject/envs/v0-pq/lib/python3.12/site-packages/faiss_cpu.libs/libopenblaso-r0-d77a1985.3.15.so"
+    # Wheel libraries have hashed dependency names. Keep only their directory,
+    # not inherited compiler/module directories that can select an old linker.
+    export LD_LIBRARY_PATH="$(dirname "$blas")"
     build="$run/build"
     artifacts_root="$(cat "$run/artifacts-root.txt")"
     index="$HOME/IndividualProject/datasets/gist1m/indexes/gist1m_M16_efc200_seed42_gitfd11efdb86c6.bin"
@@ -42,6 +45,11 @@ if [[ "${1:-}" == "--worker" ]]; then
     } > "$run/environment.txt" 2>&1
 
     stage=preflight
+    ldd "$blas" > "$run/blas-dependencies.txt"
+    if grep -q 'not found' "$run/blas-dependencies.txt"; then
+        cat "$run/blas-dependencies.txt" >&2
+        false
+    fi
     for path in "$index" "$queries" "$truth" "$pq" "$qjl" "$opq/manifest.json" "$opq/native.cfg" "$blas"; do
         test -f "$path"
     done
@@ -78,6 +86,15 @@ PY
     "$cmake" --build "$build" --target v0_performance_runner uq_opq_performance_runner \
       uq_ivf_performance_runner uq_native_runner uq_capture uq_capture_fixture \
       --parallel "${SLURM_CPUS_PER_TASK:-1}" > "$run/build.log" 2>&1
+
+    stage=runtime_libraries
+    for runner in uq_native_runner uq_ivf_performance_runner uq_opq_performance_runner v0_performance_runner; do
+        ldd "$build/$runner" > "$run/$runner-dependencies.txt"
+        if grep -q 'not found' "$run/$runner-dependencies.txt"; then
+            cat "$run/$runner-dependencies.txt" >&2
+            false
+        fi
+    done
 
     stage=integration
     "$py" tests/python/uq_ivf_integration_test.py --build "$build" --out "$run/integration" \
