@@ -129,7 +129,17 @@ rows = list(csv.DictReader((root/"smoke/points.csv").open()))
 assert len(rows) == 7
 assert len({r["method"] for r in rows}) == 7
 for row in rows:
-    if row["method"] != "hnsw":
+    method = row["method"]
+    perf = json.loads((root/"smoke"/row["case_id"]/"performance.json").read_text())
+    if method in ("pq8", "pq_qjl"):
+        # Legacy performance output does not expose pruning counters. Validate
+        # the selected search path without inventing a zero or missing count.
+        expected = "approx-no-retry" if method == "pq8" else "residual-threshold"
+        assert perf["method"] == expected, (method, perf.get("method"))
+        parameter = "beta" if method == "pq8" else "theta"
+        assert abs(float(perf[parameter])-float(row["beta"])) < 1e-10
+        assert perf["result_records_written"] and perf["measured_queries"] == 100
+    elif method != "hnsw":
         assert int(row["pruned_estimates"]) > 0, row
 baseline = next(r for r in rows if r["method"] == "hnsw")
 def labels(path):
@@ -141,6 +151,7 @@ assert len(a) == 1000 and a == b, "Baseline runner top-k mismatch"
 legacy = json.loads((root/"legacy-baseline.json").read_text())
 report = {"topk_equal": True, "legacy_qps": legacy["qps"],
           "ivf_runner_no_prune_qps": float(baseline["qps"]),
+          "legacy_pruning_counts": "not reported by legacy runner",
           "note": "100-query smoke timings are diagnostic only; not a performance equivalence test."}
 (root/"baseline-bridge.json").write_text(json.dumps(report, indent=2)+"\n")
 PY

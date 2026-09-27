@@ -92,7 +92,7 @@ grid命令除已有--config/--artifacts/--index/--queries/--ground-truth/--runne
 --qjl-companion 上述QJL路径
 --opq-artifact 上述OPQ目录
 
-先7点smoke；检查各method存在、旧方法实际剪枝非零、batch128、QPS计prep、正确率合理、hash/日志。
+先7点smoke；检查各method存在、旧PQ/QJL输出的method及beta/theta与请求一致、新runner剪枝计数非零、batch128、QPS计prep、正确率合理、hash/日志。旧PQ/QJL性能JSON不输出剪枝计数，标为不可用，不能由该输出证明实际剪枝次数。
 另用v0 runner的--method baseline与IVF runner的--no-prune在相同ef400检查top-k及时间；前者不在现有七方法grid里，需单独运行。若baseline实现开销明显不同，需单列两个baseline，而非将runner差异归因于量化。
 当前脚本支持legacy命令转发，但真实七方法集群联合运行仍未验收；本方案不宣称已通过。
 完成smoke再跑mid和high，不重训K256，不启动K1024。
