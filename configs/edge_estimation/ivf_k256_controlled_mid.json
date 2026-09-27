@@ -1,0 +1,117 @@
+{
+  "architecture": "hnsw_coarse_residual_edges",
+  "exploratory": true,
+  "dimension": 960,
+  "m": 32,
+  "nbits": 8,
+  "seed": 42,
+  "qjl_seed": 43,
+  "qjl_bits": 128,
+  "coarse_centers": [
+    256
+  ],
+  "sample_cap": 100000,
+  "iterations": 25,
+  "opq_iterations": 25,
+  "training_threads": 1,
+  "encode_batch_size": 4096,
+  "k": 10,
+  "query_start": 0,
+  "query_count": 1000,
+  "warmup_queries": 100,
+  "repeats": 1,
+  "batch_size": 128,
+  "purpose": "K256 historical-control mid-recall grid; 92 points",
+  "methods": {
+    "hnsw": {
+      "ef_search": [
+        200,
+        425,
+        600,
+        750
+      ]
+    },
+    "pq8": {
+      "ef_search": [
+        250,
+        400,
+        600,
+        700
+      ],
+      "beta": [
+        1.45,
+        1.5,
+        1.6
+      ]
+    },
+    "opq": {
+      "ef_search": [
+        250,
+        400,
+        600,
+        700
+      ],
+      "beta": [
+        1.3,
+        1.35,
+        1.4
+      ]
+    },
+    "pq_qjl": {
+      "ef_search": [
+        250,
+        425,
+        600,
+        700
+      ],
+      "beta": [
+        1.04,
+        1.08,
+        1.12
+      ]
+    },
+    "ivf_pq": {
+      "ef_search": [
+        250,
+        400,
+        600,
+        700
+      ],
+      "beta": [
+        1.35,
+        1.45,
+        1.5,
+        1.55,
+        1.6
+      ]
+    },
+    "ivf_opq": {
+      "ef_search": [
+        250,
+        400,
+        600,
+        700
+      ],
+      "beta": [
+        1.2,
+        1.3,
+        1.35,
+        1.4
+      ]
+    },
+    "ivf_pq_qjl": {
+      "ef_search": [
+        250,
+        425,
+        600,
+        700
+      ],
+      "beta": [
+        1.3,
+        1.35,
+        1.4,
+        1.6
+      ]
+    }
+  }
+}

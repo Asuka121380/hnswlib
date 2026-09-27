@@ -1,0 +1,80 @@
+{
+  "architecture": "hnsw_coarse_residual_edges",
+  "exploratory": true,
+  "dimension": 960,
+  "m": 32,
+  "nbits": 8,
+  "seed": 42,
+  "qjl_seed": 43,
+  "qjl_bits": 128,
+  "coarse_centers": [
+    256
+  ],
+  "sample_cap": 100000,
+  "iterations": 25,
+  "opq_iterations": 25,
+  "training_threads": 1,
+  "encode_batch_size": 4096,
+  "k": 10,
+  "query_start": 0,
+  "query_count": 100,
+  "warmup_queries": 20,
+  "repeats": 1,
+  "batch_size": 128,
+  "purpose": "Seven-method integration smoke only; QPS not a reported result",
+  "methods": {
+    "hnsw": {
+      "ef_search": [
+        400
+      ]
+    },
+    "pq8": {
+      "ef_search": [
+        400
+      ],
+      "beta": [
+        1.5
+      ]
+    },
+    "opq": {
+      "ef_search": [
+        400
+      ],
+      "beta": [
+        1.3
+      ]
+    },
+    "pq_qjl": {
+      "ef_search": [
+        400
+      ],
+      "beta": [
+        1.08
+      ]
+    },
+    "ivf_pq": {
+      "ef_search": [
+        400
+      ],
+      "beta": [
+        1.5
+      ]
+    },
+    "ivf_opq": {
+      "ef_search": [
+        400
+      ],
+      "beta": [
+        1.3
+      ]
+    },
+    "ivf_pq_qjl": {
+      "ef_search": [
+        400
+      ],
+      "beta": [
+        1.4
+      ]
+    }
+  }
+}
