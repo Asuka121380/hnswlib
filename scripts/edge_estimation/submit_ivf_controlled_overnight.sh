@@ -155,6 +155,13 @@ report = {"topk_equal": True, "legacy_qps": legacy["qps"],
           "note": "100-query smoke timings are diagnostic only; not a performance equivalence test."}
 (root/"baseline-bridge.json").write_text(json.dumps(report, indent=2)+"\n")
 PY
+    if [[ -f "$run/opq-confirm-study.txt" ]]; then
+        stage=opq_confirmation
+        taskset -c "$cpu" /usr/bin/time -v "$py" scripts/edge_estimation/ivf_opq_confirmation.py \
+          "$run" "${common[@]}" 2> "$run/opq-resource.log"
+        printf 'COMPLETE OPQ study run=%s time=%s\n' "$run" "$(date -Is)"
+        exit 0
+    fi
     stage=grid
     taskset -c "$cpu" /usr/bin/time -v "$py" scripts/edge_estimation/ivf_experiments.py grid \
       --config configs/edge_estimation/ivf_k256_controlled_full.json \
@@ -189,7 +196,7 @@ PY
     exit 0
 fi
 
-account="" partition="" qos="" dry_run=0
+account="" partition="" qos="" dry_run=0 opq_confirm=0
 memory=32G time_limit=12:00:00 cpus=4
 artifacts_root="$HOME/IndividualProject/results/ivf/gist-k256-GnqHj6/artifacts/k256"
 while (( $# )); do
@@ -202,8 +209,9 @@ while (( $# )); do
         --cpus) cpus="$2"; shift 2 ;;
         --artifacts) artifacts_root="$2"; shift 2 ;;
         --dry-run) dry_run=1; shift ;;
+        --opq-confirm) opq_confirm=1; shift ;;
         --help)
-            echo "bash scripts/edge_estimation/submit_ivf_controlled_overnight.sh --account NAME --partition NAME --qos NAME [--mem 32G] [--time 12:00:00] [--cpus 4] [--artifacts DIR] [--dry-run]"
+            echo "bash scripts/edge_estimation/submit_ivf_controlled_overnight.sh --account NAME --partition NAME --qos NAME [--opq-confirm] [--mem 32G] [--time 12:00:00] [--cpus 4] [--artifacts DIR] [--dry-run]"
             exit 0 ;;
         *) echo "Unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -221,6 +229,10 @@ run="$(mktemp -d "$HOME/IndividualProject/results/ivf/controlled-overnight-XXXXX
 mkdir "$run/source"
 git -C "$repo" rev-parse HEAD > "$run/source-commit.txt"
 git -C "$repo" archive HEAD | tar -x -C "$run/source"
+if (( opq_confirm )); then
+    test -f "$run/source/scripts/edge_estimation/ivf_opq_confirmation.py"
+    printf 'opq-confirm\n' > "$run/opq-confirm-study.txt"
+fi
 printf '%s\n' "$artifacts_root" > "$run/artifacts-root.txt"
 printf 'RUN=%s\n' "$run"
 if (( dry_run )); then

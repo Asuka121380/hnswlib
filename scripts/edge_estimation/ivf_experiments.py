@@ -57,6 +57,37 @@ def identity(path):
     return {"path":str(path.resolve()),"sha256":sha256_file(path),"size":path.stat().st_size}
 
 
+def expanded_cases(cfg):
+    """Expand either a Cartesian grid or an explicit, unique list of configurations."""
+    templates = cfg.get("cases")
+    if templates is None:
+        templates=[]
+        for method, params in cfg["methods"].items():
+            batches = [1] if method in {"hnsw","pq8","pq_qjl"} else cfg.get("batch_grid",[cfg["batch_size"]])
+            for ef,beta,batch in itertools.product(params["ef_search"],params.get("beta",[None]),batches):
+                templates.append(dict(method=method,ef_search=ef,beta=beta,batch_size=batch))
+    if not templates:
+        raise ValueError("empty case list")
+    seen=set()
+    for case in templates:
+        method=case["method"]
+        if method not in cfg["methods"] or case["ef_search"] < cfg["k"] or case["batch_size"] < 1:
+            raise ValueError("invalid explicit case")
+        if method != "hnsw" and (case["beta"] is None or not np.isfinite(case["beta"]) or case["beta"] <= 0):
+            raise ValueError("invalid explicit beta")
+        if method in {"hnsw","pq8","pq_qjl"} and case["batch_size"] != 1:
+            raise ValueError("method only supports batch=1")
+        key=tuple(case[k] for k in ("method","ef_search","beta","batch_size"))
+        if key in seen: raise ValueError("duplicate explicit case")
+        seen.add(key)
+    cases=[]
+    for repeat in range(cfg["repeats"]):
+        block=[{**case,"repeat_id":repeat} for case in templates]
+        random.Random(cfg.get("seed",42)+repeat).shuffle(block)
+        cases.extend(block)
+    return cases
+
+
 def train(args,cfg):
     args.out.mkdir(parents=True, exist_ok=True)
     script=ROOT / "scripts/edge_estimation/ivf_train.py"
@@ -145,14 +176,7 @@ def grid(args,cfg):
         if path is None: raise ValueError(f"legacy control needs --{name.replace('_','-')}")
         manifest["inputs"][name]=identity(path/"manifest.json" if name=="opq_artifact" else path)
     dump(args.out/"manifest.json",manifest)
-    cases=[]
-    batches=cfg.get("batch_grid",[cfg["batch_size"]])
-    for repeat in range(cfg["repeats"]):
-        block=[]
-        for method,params in cfg["methods"].items():
-            for ef,beta,batch in itertools.product(params["ef_search"],params.get("beta",[None]),[1] if method in {"hnsw","pq8","pq_qjl"} else batches):
-                block.append({"method":method,"ef_search":ef,"beta":beta,"batch_size":batch,"repeat_id":repeat})
-        random.Random(cfg.get("seed",42)+repeat).shuffle(block); cases.extend(block)
+    cases=expanded_cases(cfg)
     dump(args.out/"cases.json",cases)
     rows=[]
     for ordinal,case in enumerate(cases):
