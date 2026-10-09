@@ -1,0 +1,4 @@
+# Separate data preparation environment; do NOT pip install into the frozen QPS env.
+# Reuse the project's existing pinned preparation stack; export pip freeze --all.
+numpy==2.4.6
+pyarrow==24.0.0

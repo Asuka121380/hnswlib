@@ -16,6 +16,9 @@ def execute(a):
     if phase not in ("dev","batch","select","test","diagnostic","mechanism"):raise ValueError("invalid phase")
     data=unseal(a.dataset);assets=verify_assets(a.assets);build=verify_build(a.build,not a.local_smoke)
     if not data.get("validated"):raise ValueError("unvalidated dataset")
+    if data.get("synthetic_only") and not a.local_smoke:
+        raise ValueError("synthetic dataset is restricted to --local-smoke")
+    if data.get("preprocessing_manifest"):verify_file(data["preprocessing_manifest"])
     for key,val in p["training"].items():
         actual=assets["training_spec"].get(key)
         if key=="trainer":

@@ -264,7 +264,8 @@ def main():
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
     require(len(set(args.dimensions)) == len(args.dimensions)
-            and all(d in (96, 128, 960) for d in args.dimensions), "Supported dimensions: 96, 128, 960")
+            and all(d in (96, 128, 960, 1024, 1536, 3072) for d in args.dimensions),
+            "Supported dimensions: 96, 128, 960, 1024, 1536, 3072")
     native = args.native.resolve(strict=True)
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=False)

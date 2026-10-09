@@ -154,6 +154,17 @@ def materialize(args):
     verify_file(audit["registry"])
     reg=registry(audit["registry"]["path"])
     spec=reg["datasets"][args.dataset]
+    preprocessing=spec.get("preprocessing_manifest")
+    if preprocessing:
+        from scripts.datasets.prepare_highdim import verify_conversion
+        verify_file(preprocessing)
+        conversion=verify_conversion(preprocessing["path"],bool(spec.get("synthetic_only")))
+        if (conversion["dataset_id"]!=args.dataset or conversion["n_base"]!=spec["n_base"]
+                or conversion["dimension"]!=spec["dimension"]
+                or conversion["outputs"]["base.fvecs"]!=identity(spec["base"]["path"])
+                or len(spec["query_sources"])!=1
+                or conversion["outputs"]["query_candidates.fvecs"]!=identity(next(iter(spec["query_sources"].values()))["path"])):
+            raise ValueError("preprocessing manifest differs from registered data")
     splits=load(args.split_spec)["datasets"][args.dataset]
     if set(splits)!={"dev","select","test"}: raise ValueError("need dev/select/test splits")
     d=spec["dimension"]
@@ -231,6 +242,10 @@ def materialize(args):
                   "split_spec":identity(args.split_spec),"split_seed":args.seed,
                   "test_independence_verified":True,"excluded":excluded,
                   "test_source":splits["test"]["source"],"validated":False}
+        if preprocessing:
+            manifest["preprocessing_manifest"]=preprocessing
+        if spec.get("synthetic_only"):
+            manifest["synthetic_only"]=True
         seal(root/"dataset_manifest.json",manifest)
         # Adapt to the existing real_data_trace_runner schema.
         write(root/"dataset.json",{"dataset":args.dataset,"distance_kind":"squared_l2_float32",
@@ -295,6 +310,7 @@ def exact_gt(args):
 
 def validate(args):
     path=Path(args.dataset_manifest);data=unseal(path)
+    if data.get("preprocessing_manifest"):verify_file(data["preprocessing_manifest"])
     for key in ("base","query_pool","base_labels","query_sources","warmup_ids","audit","split_spec"):
         verify_file(data[key])
     if not data.get("test_independence_verified"):raise ValueError("query independence not verified")

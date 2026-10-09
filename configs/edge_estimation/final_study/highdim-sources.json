@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "bioasq1024": {
+      "dataset_id": "bioasq1024_cos_v1",
+      "dimension": 1024,
+      "id_column": "id",
+      "vector_column": "emb",
+      "kind": "official_queries",
+      "base_url": "https://assets.zilliz.com/benchmark/bioasq_medium_1m/",
+      "files": [
+        {"relative_path": "shuffle_train.parquet", "role": "base"},
+        {"relative_path": "test.parquet", "role": "query"},
+        {"relative_path": "neighbors.parquet", "role": "gt"}
+      ]
+    },
+    "dbpedia1536": {
+      "dataset_id": "dbpedia_te3l1536_holdout_cos_v1",
+      "dimension": 1536,
+      "id_column": "_id",
+      "vector_column": "text-embedding-3-large-1536-embedding",
+      "kind": "heldout_documents",
+      "repo_id": "Qdrant/dbpedia-entities-openai3-text-embedding-3-large-1536-1M",
+      "revision": "4a9731217921bc476a0f03544f11f22ae4903fa5",
+      "shards": 26
+    },
+    "dbpedia3072": {
+      "dataset_id": "dbpedia_te3l3072_holdout_cos_v1",
+      "dimension": 3072,
+      "id_column": "_id",
+      "vector_column": "text-embedding-3-large-3072-embedding",
+      "kind": "heldout_documents",
+      "repo_id": "Qdrant/dbpedia-entities-openai3-text-embedding-3-large-3072-1M",
+      "revision": "b2f301648eda4c5dbe659235589c86ffec702581",
+      "shards": 63
+    }
+  }
+}
