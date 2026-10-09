@@ -72,6 +72,7 @@ def load_internal_to_base(assets: dict[str, Any], node_count: int,
         raise ValueError("internal_to_label must be one-to-one")
     return normalized, sha256_file(path), {
         "kind": "npy_internal_to_external_label", "path": str(path.resolve()),
+        "value_semantics": "base_row",  # Historical field name; these are not search-result labels.
         "file": file_entry(path), "count": node_count,
     }
 
@@ -189,13 +190,23 @@ def train_encode(config_path: Path, assets_path: Path, catalog_dir: Path,
                        "faiss" if kind in {"opq", "rabitq"} else "numpy_reference")
     sample_cap = min(edge_count, int(trainer.get("sample_cap", min(edge_count, 20000))))
     seed = int(trainer.get("seed", 20260924))
-    rng = np.random.default_rng(seed)
-    candidate_ids = np.sort(rng.choice(edge_count, sample_cap, replace=False))
+    if trainer.get("shared_sample_ids"):
+        from scripts.edge_estimation.ivf_train import context
+        from scripts.edge_estimation.final_study.sample_edges import read_sample
+        _, _, _, _, _, bound_hashes = context(assets_path, catalog_dir, dimension)
+        candidate_ids = read_sample(trainer["shared_sample_ids"], assets_path, catalog_dir, dimension)
+        sample_cap = len(candidate_ids)
+    else:
+        bound_hashes = {}
+        rng = np.random.default_rng(seed)
+        candidate_ids = np.sort(rng.choice(edge_count, sample_cap, replace=False))
     _, _, sample_lengths, sample = edge_geometry(
         base, mapping, offsets, targets, candidate_ids)
     valid_sample = np.isfinite(sample_lengths) & (sample_lengths > 0.0)
     sample_ids = candidate_ids[valid_sample]
     sample = sample[valid_sample]
+    if trainer.get("shared_sample_ids") and not valid_sample.all():
+        raise ValueError("shared training sample contains zero/nonfinite edges")
     if sample.shape[0] < (1 << nbits):
         raise ValueError("valid non-zero training sample is smaller than centroid count")
 
@@ -242,6 +253,8 @@ def train_encode(config_path: Path, assets_path: Path, catalog_dir: Path,
                 f"nsplits={nsplits}", f"stages_per_split={stages}", "norm_bits=0",
                 "codebook_layout=split_stage_centroid_dimension",
             ])
+        if bound_hashes:
+            native_lines.append(f"index_sha256={bound_hashes['index']}")
         if kind == "rabitq":
             native_lines.extend([
                 f"code_size={model.code_size}", f"sign_bytes={(dimension + 7) // 8}",
@@ -267,6 +280,7 @@ def train_encode(config_path: Path, assets_path: Path, catalog_dir: Path,
             "encoding_seconds": encoding_seconds,
             "dependency_versions": model.dependency_versions or {},
             "python": sys.version.split()[0], "mapping": mapping_metadata,
+            "bound_assets": bound_hashes,
         }
         training.write_text(json.dumps(training_payload, indent=2, sort_keys=True) + "\n",
                             encoding="utf-8")

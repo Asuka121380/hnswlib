@@ -61,17 +61,12 @@ class IvfEdgeArtifactKernel {
             prepareQueryBatch(std::vector<uint64_t>{id}, 1U);
             prepared_ = false; // scalar lifecycle remains scalar on the next query
         }
-        const auto it = slots_.find(id);
-        if (it == slots_.end()) throw std::runtime_error("query absent from prepared IVF batch");
-        slot_ = it->second; current_ = id;
+        slot_ = slots_.at(id); current_ = id;
     }
     void prepareQueryBatch(const std::vector<uint64_t>& ids, size_t batch_size) {
         if (ids.empty() || !batch_size) throw std::invalid_argument("empty IVF query batch");
-        prepared_ = false; current_ = ~uint64_t(0); slots_.clear();
-        for (size_t i=0; i<ids.size(); ++i) {
-            (void)queries_->query(ids[i]);
-            if (!slots_.emplace(ids[i], i).second) throw std::invalid_argument("duplicate query id");
-        }
+        prepared_ = false; current_ = ~uint64_t(0);
+        slots_.reset(ids, static_cast<size_t>(queries_->count()));
         const size_t ls = lutSize();
         luts_.resize(ids.size()*ls); coarse_.resize(ids.size()*nc_);
         signed_luts_.resize(ids.size()*qjlLutSize());
@@ -111,6 +106,9 @@ class IvfEdgeArtifactKernel {
     size_t preparedQueryCount() const { return count_; }
     size_t preparedBatchSize() const { return batch_; }
 
+    bool zeroLengthEdge(uint64_t id) const {
+        return id < edges_ && detail::readF64(records_.data() + id * stride_) == 0.0;
+    }
     double score(const EventRecord& event) {
         if (event.query_id != current_ || event.edge_id >= edges_ || !std::isfinite(event.d_current))
             return std::numeric_limits<double>::quiet_NaN();
@@ -140,7 +138,7 @@ class IvfEdgeArtifactKernel {
     }
     uint64_t scratchBytes() const {
         return 4ULL*(luts_.capacity()+coarse_.capacity()+signed_luts_.capacity()+input_.capacity()+
-                     rotated_.capacity()+projected_.capacity()) + slots_.size()*(sizeof(uint64_t)+sizeof(size_t)+3*sizeof(void*));
+                     rotated_.capacity()+projected_.capacity()) + slots_.bytes();
     }
  private:
     uint32_t number(const char* key) const {
@@ -170,7 +168,7 @@ class IvfEdgeArtifactKernel {
     uint64_t current_=~uint64_t(0);
     bool prepared_=false;
     size_t slot_=0,count_=0,batch_=0;
-    std::map<uint64_t,size_t> slots_;
+    QuerySlots slots_;
     std::vector<float> centers_,codebook_,rotation_,projection_,luts_,coarse_,signed_luts_,input_,rotated_,projected_;
     std::vector<uint8_t> records_;
 };

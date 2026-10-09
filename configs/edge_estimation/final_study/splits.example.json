@@ -1,0 +1,55 @@
+{
+  "datasets": {
+    "gist1m": {
+      "dev": {
+        "source": "official",
+        "count": 500,
+        "warmup_count": 100,
+        "allow_seen": true
+      },
+      "select": {
+        "source": "official",
+        "count": 500,
+        "allow_seen": true
+      },
+      "test": {
+        "source": "learn",
+        "count": 5000
+      }
+    },
+    "sift1m": {
+      "dev": {
+        "source": "official",
+        "count": 2000,
+        "warmup_count": 100,
+        "allow_seen": true
+      },
+      "select": {
+        "source": "official",
+        "count": 2000,
+        "allow_seen": true
+      },
+      "test": {
+        "source": "official",
+        "count": 6000
+      }
+    },
+    "deep1m_yandex10m_prefix_v1": {
+      "dev": {
+        "source": "official",
+        "count": 2000,
+        "warmup_count": 100,
+        "allow_seen": true
+      },
+      "select": {
+        "source": "official",
+        "count": 2000,
+        "allow_seen": true
+      },
+      "test": {
+        "source": "official",
+        "count": 6000
+      }
+    }
+  }
+}

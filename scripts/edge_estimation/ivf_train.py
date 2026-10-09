@@ -103,16 +103,27 @@ def train_coarse(args):
     training = context(args.training_assets, args.training_catalog, args.dimension) if args.training_assets else (
         base, mapping, offsets, targets, cat, hashes)
     tb, tm, to, tt, tc, th = training
-    ids = np.sort(np.random.default_rng(args.seed).choice(len(tt), min(args.sample_cap, len(tt)), replace=False))
+    if getattr(args, "sample_ids", None):
+        if args.training_assets:
+            raise ValueError("shared base-graph sample cannot use a separate training graph")
+        from scripts.edge_estimation.final_study.sample_edges import read_sample
+        ids = read_sample(args.sample_ids, args.assets, args.catalog, args.dimension)
+    else:
+        ids = np.sort(np.random.default_rng(args.seed).choice(len(tt), min(args.sample_cap, len(tt)), replace=False))
     _, _, lengths, sample = edge_geometry(tb, tm, to, tt, ids)
     valid = lengths > 0
+    if getattr(args, "sample_ids", None) and not valid.all():
+        raise ValueError("shared sample contains invalid edges")
     ids, sample = ids[valid], sample[valid]
     if len(sample) < max(args.nlist, 256):
         raise ValueError("need at least max(nlist,256) nonzero training edges")
     faiss.omp_set_num_threads(args.threads)
     km = faiss.Kmeans(args.dimension, args.nlist, niter=args.iterations,
                       seed=args.seed, nredo=1, max_points_per_centroid=max(256, math.ceil(len(sample)/args.nlist)))
+    validation_sampling_seconds = time.perf_counter()-start
+    training_start = time.perf_counter()
     km.train(np.ascontiguousarray(sample))
+    coarse_training_seconds = time.perf_counter()-training_start
     centers = np.asarray(km.centroids, dtype="<f4")
     index = faiss_index(centers, args.threads)
     with atomic_output_dir(args.out) as root:
@@ -120,6 +131,7 @@ def train_coarse(args):
         sample.astype("<f4").tofile(root / "sample.f32le")
         ids.astype("<u8").tofile(root / "sample_ids.u64le")
         counts = np.zeros(args.nlist, dtype=np.int64)
+        assignment_start = time.perf_counter()
         with (root / "assignments.u32le").open("wb") as stream:
             for first in range(0, len(targets), args.batch_size):
                 eids = np.arange(first, min(first+args.batch_size, len(targets)))
@@ -127,6 +139,7 @@ def train_coarse(args):
                 assigned = index.search(unit, 1)[1][:, 0].astype("<u4")
                 assigned.tofile(stream)
                 counts += np.bincount(assigned, minlength=args.nlist)
+        assignment_seconds = time.perf_counter()-assignment_start
         residual = sample - centers[index.search(sample, 1)[1][:, 0]]
         manifest = {"format": "uq-ivf-edge-coarse/1", "dimension": args.dimension,
                     "nlist": args.nlist, "seed": args.seed, "edge_count": len(targets),
@@ -134,6 +147,10 @@ def train_coarse(args):
                     "training_assets": th, "training_catalog_identity": tc["catalog_identity"],
                     "training_scope": "separate_training_graph" if args.training_assets else "frozen_base_graph",
                     "sample_count": len(ids), "training_seconds": time.perf_counter()-start,
+                    "validation_sampling_seconds": validation_sampling_seconds,
+                    "coarse_training_seconds": coarse_training_seconds,
+                    "assignment_seconds": assignment_seconds,
+                    "sample_ids_sha256": sha256_file(root / "sample_ids.u64le"),
                     "faiss": faiss.__version__, "numpy": np.__version__,
                     "iterations": args.iterations, "threads": args.threads,
                     "list_statistics": {"mean": float(counts.mean()), "p95": float(np.quantile(counts, .95)),
@@ -164,6 +181,13 @@ def encode(args):
     sample -= centers[faiss_index(centers, args.threads).search(sample, 1)[1][:, 0]]
     trainer = {"provider": "faiss", "seed": coarse["seed"], "iterations": args.iterations,
                "outer_iterations": args.opq_iterations, "threads": args.threads}
+    if getattr(args, "trainer_config", None):
+        from scripts.edge_estimation.contracts import load_strict_json
+        trainer = load_strict_json(args.trainer_config)
+        if trainer.get("provider") != "faiss" or trainer.get("seed") != coarse["seed"] or trainer.get("threads") != args.threads:
+            raise ValueError("trainer config differs from coarse seed/provider/thread contract")
+    validation_seconds = time.perf_counter()-start
+    training_start = time.perf_counter()
     pq_identity = None
     if args.method == "pq_qjl":
         if not args.pq_artifact:
@@ -184,6 +208,7 @@ def encode(args):
     else:
         model = train_product_model({"kind": "opq" if args.method == "opq" else "pq_packed",
                                      "m": args.m, "nbits": args.nbits}, trainer, sample)
+    quantizer_training_seconds = time.perf_counter()-training_start
     rotation = model.rotation
     if rotation is not None and not np.allclose(rotation @ rotation.T, np.eye(d), atol=2e-4, rtol=2e-4):
         raise ValueError("OPQ rotation is not orthogonal")
@@ -198,6 +223,7 @@ def encode(args):
             rotation.astype("<f4").tofile(root / "rotation.f32le")
         if qjl:
             projection.tofile(root / "projection.f32le")
+        encoding_start = time.perf_counter()
         with (root / "edges.bin").open("wb") as stream:
             for first in range(0, len(targets), args.batch_size):
                 ids = np.arange(first, min(first+args.batch_size, len(targets)))
@@ -226,6 +252,7 @@ def encode(args):
                     field("u1", 28+cb, (args.qjl_bits//8,))[:] = signs
                 field("<f8", 8)[:] = offset
                 stream.write(payload)
+        encoding_seconds = time.perf_counter()-encoding_start
         try:
             commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
         except (OSError, subprocess.CalledProcessError):
@@ -237,6 +264,9 @@ def encode(args):
                     "catalog_identity": cat["catalog_identity"], "assets": hashes,
                     "coarse_identity": sha256_file(root_coarse / "manifest.json"),
                     "coarse_manifest": coarse, "trainer": trainer, "pq_identity": pq_identity,
+                    "validation_seconds": validation_seconds,
+                    "quantizer_training_seconds": quantizer_training_seconds,
+                    "encoding_seconds": encoding_seconds,
                     "dependency_versions": model.dependency_versions, "source_commit": commit,
                     "source_files": {str(p.relative_to(Path(__file__).resolve().parents[2])).replace("\\", "/"): sha256_file(p)
                         for p in [Path(__file__).resolve(), *sorted((Path(__file__).parent/"trainers").glob("*.py"))]},
@@ -269,6 +299,7 @@ def main():
     c.add_argument("--dimension", type=int, required=True)
     c.add_argument("--nlist", type=int, default=256)
     c.add_argument("--sample-cap", type=int, default=100000)
+    c.add_argument("--sample-ids", type=Path)
     c.add_argument("--seed", type=int, default=42)
     c.add_argument("--training-assets", type=Path)
     c.add_argument("--training-catalog", type=Path)
@@ -277,6 +308,7 @@ def main():
     e.add_argument("--m", type=int, default=32)
     e.add_argument("--nbits", type=int, default=8)
     e.add_argument("--opq-iterations", type=int, default=25)
+    e.add_argument("--trainer-config", type=Path)
     e.add_argument("--qjl-bits", type=int, default=128)
     e.add_argument("--qjl-seed", type=int, default=43)
     e.add_argument("--pq-artifact", type=Path)

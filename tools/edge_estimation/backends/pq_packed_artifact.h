@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -56,7 +57,12 @@ inline std::filesystem::path checkedArtifactPath(
     return root / value;
 }
 
+inline uint64_t& artifactHashNanoseconds() {
+    static thread_local uint64_t value = 0;
+    return value;
+}
 inline std::string artifactSha256(const std::filesystem::path& path) {
+    const auto started = std::chrono::steady_clock::now();
     std::ifstream input(path, std::ios::binary);
     if (!input) throw std::runtime_error("cannot hash artifact file");
     hnswlib::EdgeQuantV0Sha256 sha;
@@ -67,7 +73,10 @@ inline std::string artifactSha256(const std::filesystem::path& path) {
         if (count > 0) sha.update(buffer.data(), static_cast<size_t>(count));
     }
     if (!input.eof()) throw std::runtime_error("artifact file hash read failed");
-    return hnswlib::edgeQuantV0Sha256Hex(sha.final());
+    const auto digest = hnswlib::edgeQuantV0Sha256Hex(sha.final());
+    artifactHashNanoseconds() += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - started).count());
+    return digest;
 }
 
 inline std::vector<float> readArtifactFloats(const std::filesystem::path& path) {

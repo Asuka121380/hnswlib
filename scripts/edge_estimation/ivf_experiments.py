@@ -154,9 +154,9 @@ def grid(args,cfg):
     args.out.mkdir(parents=True,exist_ok=False)
     artifacts={method:verify(args.artifacts/method) for method in cfg["methods"] if method.startswith("ivf_")}
     identities={a["coarse_identity"] for a in artifacts.values()}
-    if len(identities)!=1: raise ValueError("methods must share exactly one coarse bundle")
-    first=next(iter(artifacts.values()))
-    if first["assets"]["index"] != sha256_file(args.index): raise ValueError("index identity mismatch")
+    if artifacts and len(identities)!=1: raise ValueError("methods must share exactly one coarse bundle")
+    if artifacts and next(iter(artifacts.values()))["assets"]["index"] != sha256_file(args.index):
+        raise ValueError("index identity mismatch")
     for method,artifact in artifacts.items():
         if artifact["method"] != method or artifact["dimension"] != cfg["dimension"]:
             raise ValueError("method/dimension mismatch")
@@ -183,7 +183,7 @@ def grid(args,cfg):
         case_id=f"{ordinal:04d}-{case['method']}-ef{case['ef_search']}-b{case['beta']}-batch{case['batch_size']}-r{case['repeat_id']}"
         dest=args.out/case_id; dest.mkdir()
         method=case["method"]
-        primary="ivf_pq" if "ivf_pq" in artifacts else next(iter(artifacts))
+        primary="ivf_pq" if "ivf_pq" in artifacts else next(iter(artifacts), "unused-baseline")
         artifact=args.artifacts/(primary if method=="hnsw" else method)
         cmd=[args.runner,"--index-path",args.index,"--artifact-path",artifact,"--query-path",args.queries,
              "--dimension",cfg["dimension"],"--query-start",cfg.get("query_start",0),"--query-count",cfg["query_count"],
@@ -219,6 +219,12 @@ def summarize(root,plot=False):
     points=[]
     for group in grouped.values():
         point=dict(group[0]); qps=[r["qps"] for r in group]
+        for field in ("latency_p50_ns","latency_p95_ns","latency_p99_ns","batch_prepare_ns_per_query",
+                      "batch_completion_service_p95_ns","attempted_estimates","pruned_estimates",
+                      "fallback_estimates","eligible_exact_distance_count","backend_bytes","scratch_bytes",
+                      "peak_rss_bytes","catalog_payload_bytes"):
+            values=[float(r[field]) for r in group if r.get(field) not in (None, "")]
+            point[field]=float(np.median(values)) if len(values)==len(group) else None
         point.update(qps=float(np.median(qps)),qps_mean=float(np.mean(qps)),qps_std=float(np.std(qps)),
                      qps_min=min(qps),qps_max=max(qps),repeat_count=len(group),
                      recall_at_k=float(np.mean([r["recall_at_k"] for r in group])))

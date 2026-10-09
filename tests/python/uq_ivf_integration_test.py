@@ -116,7 +116,9 @@ def main():
             qid, rank = int(row["query_id"]), int(row["rank"])
             exact_ids = np.argsort(np.sum((values.astype(float)-queries[qid])**2,axis=1))[:10]+1000
             assert int(row["label"]) == exact_ids[rank]
-        run([*perf_common, "--ef-search", 20, "--beta", .2, "--output", root / f"{method}-pruned.json"])
+        pruned_common = list(perf_common)
+        pruned_common[pruned_common.index("--ef-search")+1] = 20
+        run([*pruned_common, "--beta", .2, "--output", root / f"{method}-pruned.json"])
         assert json.loads((root / f"{method}-pruned.json").read_text())["pruned_estimates"] > 0
         report[method] = {"oracle_count": len(errors), "max_absolute_error": max(errors),
                           "batch_parity": parity, "quality": quality, "no_prune_topk_exact": True}

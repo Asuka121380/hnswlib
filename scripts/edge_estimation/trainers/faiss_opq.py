@@ -19,6 +19,14 @@ def train(sample: np.ndarray, m: int, nbits: int, trainer: dict) -> ProductCodeb
     opq.niter = int(trainer.get("outer_iterations", 25))
     opq.niter_pq_0 = int(trainer.get("initial_pq_iterations", trainer.get("iterations", 25)))
     opq.niter_pq = int(trainer.get("iterations", 4))
+    opq.max_train_points = int(trainer.get("max_train_points", len(values)))
+    pq.cp.max_points_per_centroid = int(trainer.get(
+        "max_points_per_centroid", max(256, (len(values)+(1 << nbits)-1)//(1 << nbits))))
+    if min(opq.niter, opq.niter_pq_0, opq.niter_pq, opq.max_train_points,
+           pq.cp.nredo, pq.cp.max_points_per_centroid) <= 0:
+        raise ValueError("OPQ training budgets must be positive")
+    if opq.max_train_points < len(values) or pq.cp.max_points_per_centroid*(1 << nbits) < len(values):
+        raise ValueError("training budget would silently subsample the shared sample")
     opq.verbose = bool(trainer.get("verbose", False))
     opq.train(values)
     if bool(opq.have_bias):

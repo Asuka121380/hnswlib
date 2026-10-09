@@ -1,0 +1,57 @@
+{
+  "datasets": {
+    "gist1m": {
+      "dimension": 960,
+      "n_base": 1000000,
+      "metric": "squared_l2",
+      "base": {
+        "path": "/ABSOLUTE/DATA/gist_base.fvecs",
+        "format": "fvecs"
+      },
+      "query_sources": {
+        "official": {
+          "path": "/ABSOLUTE/DATA/gist_query.fvecs",
+          "format": "fvecs"
+        },
+        "learn": {
+          "path": "/ABSOLUTE/DATA/gist_learn.fvecs",
+          "format": "fvecs"
+        }
+      }
+    },
+    "sift1m": {
+      "dimension": 128,
+      "n_base": 1000000,
+      "metric": "squared_l2",
+      "base": {
+        "path": "/ABSOLUTE/DATA/sift_base.fvecs",
+        "format": "fvecs"
+      },
+      "query_sources": {
+        "official": {
+          "path": "/ABSOLUTE/DATA/sift_query.fvecs",
+          "format": "fvecs"
+        },
+        "learn": {
+          "path": "/ABSOLUTE/DATA/sift_learn.fvecs",
+          "format": "fvecs"
+        }
+      }
+    },
+    "deep1m_yandex10m_prefix_v1": {
+      "dimension": 96,
+      "n_base": 1000000,
+      "metric": "squared_l2",
+      "base": {
+        "path": "/ABSOLUTE/DATA/base.10M.fbin",
+        "format": "fbin"
+      },
+      "query_sources": {
+        "official": {
+          "path": "/ABSOLUTE/DATA/query.public.10K.fbin",
+          "format": "fbin"
+        }
+      }
+    }
+  }
+}

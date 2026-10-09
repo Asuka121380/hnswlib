@@ -17,11 +17,19 @@ struct LiveOpqMetrics {
     uint64_t pruned = 0U;
     uint64_t fallback = 0U;
     uint64_t threshold_unavailable = 0U;
+    uint64_t nonfinite_score = 0U;
+    uint64_t zero_length = 0U;
+    uint64_t catalog_mismatch = 0U;
+    uint64_t backend_exception = 0U;
 };
 
 // Bridges a full-graph rotated-PQ artifact into the generic HNSW active hook.
+template<class K> auto isZeroLengthEdge(K& k, uint64_t id, int) -> decltype(k.zeroLengthEdge(id), bool()) {
+    return k.zeroLengthEdge(id);
+}
+template<class K> bool isZeroLengthEdge(K&, uint64_t, long) { return false; }
 // Invalid/mismatched estimates always fail open to the exact distance path.
-template <typename Kernel>
+template <typename Kernel, bool CollectMetrics = true>
 class LiveArtifactPruner : public hnswlib::edge_estimation::ActiveEdgePruner {
  public:
     LiveArtifactPruner(Kernel& kernel,
@@ -39,10 +47,9 @@ class LiveArtifactPruner : public hnswlib::edge_estimation::ActiveEdgePruner {
 
     hnswlib::edge_estimation::PolicyDecision evaluate(
         const hnswlib::edge_estimation::ActivePruneRequest& request) override {
-        ++metrics_.attempted;
+        if constexpr (CollectMetrics) ++metrics_.attempted;
         if (!request.threshold_valid) {
-            ++metrics_.threshold_unavailable;
-            ++metrics_.fallback;
+            if constexpr (CollectMetrics) { ++metrics_.threshold_unavailable; ++metrics_.fallback; }
             return hnswlib::edge_estimation::PolicyDecision{false, true};
         }
 
@@ -50,7 +57,8 @@ class LiveArtifactPruner : public hnswlib::edge_estimation::ActiveEdgePruner {
             const hnswlib::edge_estimation::EdgeId edge_id =
                 catalog_.edgeId(request.source_id, request.neighbor_slot);
             if (catalog_.target(edge_id) != request.target_id) {
-                ++metrics_.fallback;
+                if constexpr (!CollectMetrics) throw std::runtime_error("catalog mismatch in uninstrumented search");
+                if constexpr (CollectMetrics) { ++metrics_.fallback; ++metrics_.catalog_mismatch; }
                 return hnswlib::edge_estimation::PolicyDecision{false, true};
             }
             EventRecord event{};
@@ -64,7 +72,11 @@ class LiveArtifactPruner : public hnswlib::edge_estimation::ActiveEdgePruner {
             event.threshold_before = request.threshold;
             const double estimate = kernel_.score(event);
             if (!std::isfinite(estimate)) {
-                ++metrics_.fallback;
+                if constexpr (CollectMetrics) {
+                    ++metrics_.fallback;
+                    if (isZeroLengthEdge(kernel_, edge_id, 0)) ++metrics_.zero_length;
+                    else ++metrics_.nonfinite_score;
+                }
                 return hnswlib::edge_estimation::PolicyDecision{false, true};
             }
             const hnswlib::edge_estimation::PolicyDecision decision =
@@ -72,12 +84,15 @@ class LiveArtifactPruner : public hnswlib::edge_estimation::ActiveEdgePruner {
                     hnswlib::edge_estimation::EdgeScore(
                         estimate, hnswlib::edge_estimation::EstimateStatus::Valid),
                     request.threshold, request.threshold_valid);
-            if (decision.fallback) ++metrics_.fallback;
-            else ++metrics_.valid;
-            if (decision.prune) ++metrics_.pruned;
+            if constexpr (CollectMetrics) {
+                if (decision.fallback) ++metrics_.fallback;
+                else ++metrics_.valid;
+                if (decision.prune) ++metrics_.pruned;
+            }
             return decision;
         } catch (const std::exception&) {
-            ++metrics_.fallback;
+            if constexpr (!CollectMetrics) throw;
+            if constexpr (CollectMetrics) { ++metrics_.fallback; ++metrics_.backend_exception; }
             return hnswlib::edge_estimation::PolicyDecision{false, true};
         }
     }

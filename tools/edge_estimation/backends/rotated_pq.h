@@ -17,6 +17,7 @@
 #include "hnswlib/edge_estimation/score_bridge.h"
 #include "../event_format.h"
 #include "../query_store.h"
+#include "../query_selection.h"
 
 namespace uq {
 
@@ -63,10 +64,7 @@ class RotatedPqArtifactKernel {
 
     void prepareQuery(uint64_t query_id) {
         if (batch_prepared_) {
-            if (query_id >= batch_slot_by_query_.size() ||
-                batch_slot_by_query_[static_cast<size_t>(query_id)] == noBatchSlot())
-                throw std::runtime_error("query was not included in prepared batch");
-            const size_t slot = batch_slot_by_query_[static_cast<size_t>(query_id)];
+            const size_t slot = batch_slots_.at(query_id);
             current_lut_ = batch_luts_.data() + slot * lutSize();
             current_query_ = query_id;
             return;
@@ -100,15 +98,7 @@ class RotatedPqArtifactKernel {
         batch_prepared_ = false;
         current_query_ = ~uint64_t(0);
         current_lut_ = nullptr;
-        batch_slot_by_query_.assign(static_cast<size_t>(queries_->count()), noBatchSlot());
-        for (size_t slot = 0; slot < query_ids.size(); ++slot) {
-            const uint64_t query_id = query_ids[slot];
-            (void)queries_->query(query_id);
-            size_t& destination = batch_slot_by_query_[static_cast<size_t>(query_id)];
-            if (destination != noBatchSlot())
-                throw std::invalid_argument("query batch contains duplicate ids");
-            destination = slot;
-        }
+        batch_slots_.reset(query_ids, static_cast<size_t>(queries_->count()));
         batch_luts_.assign(query_ids.size() * lutSize(), 0.0f);
         const size_t effective_batch = std::min(batch_size, query_ids.size());
         batch_queries_.resize(effective_batch * dimension_);
@@ -141,9 +131,18 @@ class RotatedPqArtifactKernel {
     const char* batchPreparationEngine() const { return detail::batchRotationEngine(); }
     size_t preparedQueryCount() const { return prepared_query_count_; }
     size_t preparedBatchSize() const { return prepared_batch_size_; }
+    const char* method() const { return "opq"; }
+    void verifyIndex(const std::filesystem::path& path) const {
+        const auto found = config_.find("index_sha256");
+        if (found != config_.end() && artifactSha256(path) != found->second)
+            throw std::runtime_error("OPQ index identity mismatch");
+    }
 
     void prepareSource(const EventRecord&) {}
 
+    bool zeroLengthEdge(uint64_t id) const {
+        return id < edge_count_ && detail::readF64(records_.data() + id * record_size_) == 0.0;
+    }
     double score(const EventRecord& event) {
         if (current_query_ != event.query_id || event.edge_id >= edge_count_)
             return std::numeric_limits<double>::quiet_NaN();
@@ -171,7 +170,7 @@ class RotatedPqArtifactKernel {
         return static_cast<uint64_t>(
             lut_.capacity() + rotated_query_.capacity() + batch_luts_.capacity() +
             batch_queries_.capacity() + batch_rotated_queries_.capacity()) * 4U +
-            static_cast<uint64_t>(batch_slot_by_query_.capacity()) * sizeof(size_t);
+            batch_slots_.bytes();
     }
 
  private:
@@ -200,7 +199,7 @@ class RotatedPqArtifactKernel {
     size_t prepared_batch_size_ = 0U;
     std::vector<float> codebook_, rotation_, rotated_query_, lut_;
     std::vector<float> batch_queries_, batch_rotated_queries_, batch_luts_;
-    std::vector<size_t> batch_slot_by_query_;
+    QuerySlots batch_slots_;
     std::vector<uint8_t> records_;
 };
 

@@ -14,6 +14,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.edge_estimation.final_study.common import seal, unseal, identity, verify_file
+from scripts.edge_estimation.final_study.query_contract import evaluate_results
+from scripts.edge_estimation.final_study.environment import source_snapshot
+
 
 METHOD_ORDER = ("hnsw", "pq8", "pq_qjl", "opq")
 
@@ -92,28 +98,23 @@ def read_ground_truth(path: Path, query_start: int, query_count: int, k: int) ->
 
 
 def recall_at_k(result_path: Path, truth: dict[int, set[int]], k: int) -> float:
-    returned: dict[int, list[int]] = {}
     with result_path.open(newline="", encoding="utf-8") as source:
-        for row in csv.DictReader(source):
-            query_id = int(row["query_id"])
-            if int(row["rank"]) < k:
-                returned.setdefault(query_id, []).append(int(row["label"]))
-    if set(returned) != set(truth):
-        missing = sorted(set(truth) - set(returned))
-        raise ValueError(f"result rows do not cover the requested queries; first missing={missing[:3]}")
-    return sum(len(set(returned[q]) & truth[q]) / k for q in truth) / len(truth)
+        repeats = 1 + max((int(row.get("repeat_id",0)) for row in csv.DictReader(source)), default=-1)
+    report = evaluate_results(result_path, truth, k, repeats)
+    if not report["results_stable_across_repeats"]:
+        raise ValueError("repeated top-k results differ")
+    return report["recall_at_k"]
 
 
 def file_identity(path: Path) -> dict[str, Any]:
     stat = path.stat()
     identity: dict[str, Any] = {"path": str(path.resolve()), "size": stat.st_size,
                                 "mtime_ns": stat.st_mtime_ns}
-    if stat.st_size <= 16 * 1024 * 1024:
-        digest = hashlib.sha256()
-        with path.open("rb") as source:
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                digest.update(chunk)
-        identity["sha256"] = digest.hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    identity["sha256"] = digest.hexdigest()
     return identity
 
 
@@ -175,8 +176,16 @@ def main() -> int:
                                       ("v0_runner", args.v0_runner), ("opq_runner", args.opq_runner),
                                       ("opq_native_cfg", args.opq_artifact / "native.cfg"))},
         "cases": expanded,
+        "source": source_snapshot(),
+        "opq_artifact_files": [file_identity(p) for p in sorted(args.opq_artifact.rglob("*")) if p.is_file()],
     }
-    (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    manifest_path = args.output / "manifest.json"
+    if manifest_path.exists():
+        previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not args.resume or any(previous.get(k)!=v for k,v in manifest.items() if k!="created_at"):
+            raise ValueError("output exists or resume inputs/source differ; use a new output directory")
+    else:
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     if args.dry_run:
         for case in expanded:
             print(" ".join(command_for(case, args, config, args.output / "cases" / case["case_id"])))
@@ -190,7 +199,16 @@ def main() -> int:
         result_path = directory / "results.csv"
         command = command_for(case, args, config, directory)
         print(f"[{number}/{len(expanded)}] {case['case_id']}", flush=True)
-        if not (args.resume and performance_path.is_file() and result_path.is_file()):
+        case_complete = directory / "complete.json"
+        expected_identity = {"manifest":identity(manifest_path),"command":command}
+        if args.resume and case_complete.exists():
+            previous = unseal(case_complete)
+            if previous["identity"] != expected_identity:
+                raise ValueError("resume case identity mismatch")
+            for entry in previous["outputs"]: verify_file(entry)
+        else:
+            if performance_path.exists() or result_path.exists():
+                raise ValueError("incomplete/unsealed case cannot be resumed; preserve and start a new run")
             completed = subprocess.run(command, text=True, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT, check=False)
             (directory / "runner.log").write_text(completed.stdout, encoding="utf-8")
@@ -204,6 +222,8 @@ def main() -> int:
                                                           "attempted_estimates", "pruned_estimates",
                                                           "fallback_estimates")}}
         points.append(point)
+        if not case_complete.exists():
+            seal(case_complete,{"identity":expected_identity,"outputs":[identity(performance_path),identity(result_path)]})
         write_points(args.output / "points.csv", points)
     summary = {"schema_version": 1, "recall_k": config["k"], "point_count": len(points), "points": points}
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
