@@ -95,6 +95,24 @@ $PYTHON -m scripts.edge_estimation.final_study.prepare_assets \
 
 训练顺序：有效边统一抽样 → OPQ → 粗中心训练/全边 assignment → CR-OPQ。量化维度、seed、线程、迭代数、重启数与采样上限逐项核对。默认训练预算：outer 25、initial PQ 25、inner PQ 25、redos 1、max_train_points 100000、max_points_per_centroid 391。CR 残差不二次归一化。输出 `asset_contract.json`、各阶段日志及 `offline_costs.json`。
 
+### 独立几何公式验收（2026-10-09 补齐入口）
+
+真实资产 scalar/batch parity 通过后，在计算节点运行：
+
+~~~bash
+"$PYTHON" tests/python/edge_geometry_oracle_test.py \
+  --native "$TOOLS_BUILD/uq_native_runner" --dimensions 128 960 \
+  --out "$STUDY/smoke/geometry-$SLURM_JOB_ID"
+~~~
+
+必须使用新的输出目录。测试只生成合成数据，不读取真实 dev/select/test，也不训练或覆盖已有模型。每维分别检查 OPQ 和 CR-OPQ（m=32、nbits=8、CR 中心数 256）；float64 参考从向量几何独立计算，不将导出的 anchor/offset 当作真值。17 条打乱顺序的查询包含零查询，4 条非零边与1条零边，batch=1/8/128覆盖尾块。
+
+验收包括旋转方向、中心与残差重构、anchor/offset、零边及浮点溢出的无效估计与 replay fallback、非有限查询拒绝。重新封印的错误旋转、错误 offset、缺失中心反例必须被几何参考识别。全部非有限的 parity 报告应为 valid=false/exit=3，避免空比较被误签收。
+
+退出码0且出现 INDEPENDENT_GEOMETRY_ORACLE_OK，report.json 中两维两方法全部通过，才完成本项验收。所有 fixture、逐项输出、二进制及测试源码 SHA256 均保存。bench-artifact 仅用于核验 fallback 计数，其时间不进入性能结果；本项也不代替完整 HNSW top-k 正确性检查。Windows 验证不替代集群 Linux/OpenBLAS 验收。
+
+此变更新增测试和文档，生产源码/构建内容指纹不变；同步后通过 verify_build 检查即可复用原有构建和资产。真实资产 parity 的容差条件为 abs(scalar-batch) <= 1e-4 + 1e-5*max(abs(scalar),abs(batch))，不能只比较最大绝对误差和 1e-4。
+
 ## S4–S5：开发扫描、批处理选择与冻结
 
 以下 Bash 数组可直接复用，所有路径需替换。
