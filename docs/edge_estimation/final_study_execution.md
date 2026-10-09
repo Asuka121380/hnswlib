@@ -38,6 +38,10 @@ bash scripts/edge_estimation/final_study/build.sh --out build-final-perf --blas 
 
 每个目录产生 `build_manifest.json`。如源码改动，必须重新 build 并重新生成绑定该 build 的 cases/freeze；不能拿旧 freeze 运行新二进制。显式 build flags 防止旧 CMake cache 遗留其他剪枝 hook。
 
+Slurm 会复制 batch 脚本，不能用执行时的 `BASH_SOURCE` 推算仓库位置。worker 优先使用导出的 `REPO`；未设置时使用当前目录所属的 Git 工作树，并检查必要入口文件。`submit_final_study.sh` 会显式导出自身所属仓库并设置 `sbatch --chdir`；自定义提交器也应先导出绝对路径 `REPO`，使用 `--export=ALL --chdir="$REPO"`。worker 另通过 `srun --chdir` 保证 Python 从同一仓库启动。
+
+无需集群资源的回归检查：`python tests/python/final_study_slurm_wrapper_test.py -v`。该检查模拟脚本被复制到 Slurm spool 目录，覆盖明确 REPO、当前 Git 工作树、错误路径拒绝及从其他目录提交；实际独占分配和 CPU 绑定仍需在集群验收。
+
 ## S2：数据清理、历史审计与精确 GT
 
 复制并修改 registry/splits 模板，保留副本作本次研究输入。history.json 示例：
