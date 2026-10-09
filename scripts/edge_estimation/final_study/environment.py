@@ -3,6 +3,7 @@ from __future__ import annotations
 import os, platform, subprocess, sys
 from pathlib import Path
 from .common import identity, digest, verify_file
+from .affinity import require_single_cpu
 ROOT=Path(__file__).resolve().parents[3]
 THREAD_VARS=("OMP_NUM_THREADS","OPENBLAS_NUM_THREADS","MKL_NUM_THREADS","BLIS_NUM_THREADS","VECLIB_MAXIMUM_THREADS","NUMEXPR_NUM_THREADS")
 
@@ -46,6 +47,7 @@ def runtime(formal=False):
             raise ValueError("cannot prove exclusive allocation from scontrol")
         if int(os.environ.get("SLURM_JOB_NUM_NODES","0"))!=1:
             raise ValueError("formal worker requires one node")
+        require_single_cpu(info["affinity"])
         info["slurm_job"]=job
     return info
 

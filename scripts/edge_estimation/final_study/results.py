@@ -4,12 +4,15 @@ from pathlib import Path
 import numpy as np
 from .common import identity,verify_file,unseal,load
 from .validate_run import read_completed
+from .affinity import require_single_cpu
 
 def rows(paths,phase=None,bindings=None):
     result=[];seen=set();manifests=[]
     for value in paths:
         root=Path(value);complete=root/"complete.json" if root.is_dir() else root
         doc=unseal(complete);manifest=unseal(verify_file(doc["run_manifest"]))
+        if not manifest["local_smoke"]:
+            require_single_cpu(manifest.get("runtime",{}).get("affinity"))
         for entry in manifest["bindings"].values():verify_file(entry)
         if phase and manifest["phase"]!=phase:raise ValueError("wrong evidence phase")
         if bindings and manifest["bindings"]!=bindings:raise ValueError("evidence from different inputs")

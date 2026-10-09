@@ -6,7 +6,7 @@
 
 - 同一套 Release、O3、native OFF、严格浮点（`-fno-fast-math -ffp-contract=off`）、BLAS ON 构建。两个 runner 使用同一份 `performance_loop.h`。HNSW 使用 OPQ runner 的 `--no-prune`，不加载量化资产。
 - 正式构建关闭 capture 和旧 V0 诊断/剪枝 hook；capture/build 工具另建目录。编译命令、CMake cache、源文件内容、二进制及 Linux 动态依赖均记录完整 SHA256。Windows smoke 构建记录显式 BLAS 链接文件，正式实验仅支持 Linux/Slurm。
-- 搜索和 BLAS 均单线程。正式 worker 要求独占单节点，绑定 CPU core；三次独立 Slurm allocation，每次三个串行配对 block。每个 block 的方法顺序随机化，全部方法使用相同的查询顺序。分析拒绝不同 CPU 型号/ISA 混合。
+- 搜索和 BLAS 均单线程。正式 worker 要求独占单节点，显式绑定到一个逻辑 CPU；三次独立 Slurm allocation，每次三个串行配对 block。每个 block 的方法顺序随机化，全部方法使用相同的查询顺序。分析拒绝不同 CPU 型号/ISA 混合。
 - 主指标是 `QPS = N_unique_queries × inner_repeats / service_wall`。service wall 包含每轮窗口准备、搜索、结果写入预分配内存；不包含磁盘输出、GT 评估、加载和哈希。记录各项时间及剩余时间。指标关闭时使用编译期不累加剪枝计数的模板。
 - 实际计时搜索直接保存全部 repeat/query/rank/label/distance，随后验证完整覆盖、合法标签、距离顺序和跨重复一致性；不重新搜索生成 recall。结果缓冲区在计时外分配，默认上限 2 GiB；超过上限即失败。
 - 独立诊断模式通过包装原 L2 距离函数统计真实调用数，分类记录阈值不可用、零边长、非有限估计、catalog 不符和 backend 异常。后两者导致失败；hop 暂无可靠 hook，明确输出 null。
@@ -41,6 +41,22 @@ bash scripts/edge_estimation/final_study/build.sh --out build-final-perf --blas 
 Slurm 会复制 batch 脚本，不能用执行时的 `BASH_SOURCE` 推算仓库位置。worker 优先使用导出的 `REPO`；未设置时使用当前目录所属的 Git 工作树，并检查必要入口文件。`submit_final_study.sh` 会显式导出自身所属仓库并设置 `sbatch --chdir`；自定义提交器也应先导出绝对路径 `REPO`，使用 `--export=ALL --chdir="$REPO"`。worker 另通过 `srun --chdir` 保证 Python 从同一仓库启动。
 
 无需集群资源的回归检查：`python tests/python/final_study_slurm_wrapper_test.py -v`。该检查模拟脚本被复制到 Slurm spool 目录，覆盖明确 REPO、当前 Git 工作树、错误路径拒绝及从其他目录提交；实际独占分配和 CPU 绑定仍需在集群验收。
+
+### 集群 CPU 绑定验收
+
+2026-10-09 的 weirdo 诊断作业 150339 显示，本站 TaskPlugin 为 task/cgroup，srun 请求 --cpu-bind=cores 后 Python 初始 affinity 仍有 192 个逻辑 CPU。NumPy/Faiss 导入和小计算没有改变它；os.sched_setaffinity 显式缩小到一个 CPU 后，子进程及其库初始化保持同一绑定。
+
+worker 保留 Slurm 资源申请与绑定参数，并在 **srun 内部**通过标准库入口 `affinity.py` 读取允许的 CPU 集合，选择其中编号最小的 CPU，设置并回读校验。随后 exec 启动测量 driver，先绑定再加载数值库；所有方法的子进程继承同一绑定。不得在登录节点执行绑核或写死 CPU 0。OpenBLAS 的主线程自行绑核通过 OPENBLAS_MAIN_FREE=1 关闭。
+
+正式 runtime 必须实际只有一个逻辑 CPU；每次启动 runner 前以及发布完整结果前再次检查 affinity 与初始记录一致。结果读取器同样拒绝非 local_smoke 的宽掩码或缺失 affinity 记录，包括旧的 150335 合成记录；旧目录保留作诊断证据。线程数为 1 与 CPU affinity 为单元素是两项独立条件，不能只检查 affinity 非空。
+
+无需 Slurm 的测试：
+```bash
+"$PYTHON" tests/python/final_study_affinity_test.py -v
+"$PYTHON" tests/python/final_study_slurm_wrapper_test.py -v
+```
+
+Windows 使用模拟 OS 接口测试失败拒绝和调用顺序，实际 Linux 子进程继承测试明确跳过；Linux 会运行此测试，且 wrapper fixture 使用真实绑核入口。发布前仍需真实独占作业验证，严格要求 run_manifest 的 runtime.affinity 只有一个元素，且所有 18 个 synthetic case/block 结果通过完整性校验。150339 仅证明绑核方案可行，不能代替修复后 worker 的完整验收。源码变更后刷新双构建清单，在新目录生成合成资产和 cases，不能修改旧 manifest 的 hash。
 
 ## S2：数据清理、历史审计与精确 GT
 

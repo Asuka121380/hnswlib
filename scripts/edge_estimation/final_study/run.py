@@ -6,6 +6,7 @@ import numpy as np
 from .common import cli,load,write,seal,unseal,identity,verify_file,digest,seed,name
 from .schema import protocol,unique_cases
 from .environment import verify_build,runtime
+from .affinity import check_current_cpu
 from .asset_contract import verify_assets
 from .query_contract import split_contract,read_ids,write_ids
 from .validate_run import validate,read_completed
@@ -106,6 +107,7 @@ def execute(a):
                 if c["method"]=="hnsw":cmd+=["--no-prune"]
                 else:cmd+=["--artifact-path",assets["artifacts"][c["method"]]["path"],"--beta",str(c["beta"])]
                 write(dest/"command.json",cmd)
+                if not a.local_smoke:check_current_cpu(runtime_doc["affinity"])
                 with (dest/"run.log").open("w",encoding="utf-8") as log:
                     result=subprocess.run(cmd,stdout=log,stderr=subprocess.STDOUT)
                 if result.returncode:raise ValueError(f"runner failed; see {dest/'run.log'}")
@@ -118,6 +120,7 @@ def execute(a):
         # Detect source/input mutation during the allocation before publication.
         verify_assets(a.assets);verify_build(a.build,not a.local_smoke)
         for entry in bindings.values():verify_file(entry)
+        if not a.local_smoke:check_current_cpu(runtime_doc["affinity"])
         seal(out/"complete.json",{"schema_version":2,"run_manifest":identity(manifest),"cases":completed})
     finally:
         if lock.exists():lock.unlink()

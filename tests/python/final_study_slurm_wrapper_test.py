@@ -40,6 +40,13 @@ class SlurmWrapperTest(unittest.TestCase):
                    "import json, os, sys\n"
                    f"print(json.dumps({{'cwd':os.getcwd(),'args':sys.argv[1:],"
                    f"'threads':{{k:os.environ.get(k) for k in {THREADS!r}}}}}))\n")
+        launcher = self.repo / "scripts/edge_estimation/final_study/affinity.py"
+        if sys.platform == "linux":
+            shutil.copyfile(ROOT / "scripts/edge_estimation/final_study/affinity.py", launcher)
+        else:
+            # Windows checks shell routing; Linux runs the actual affinity launcher.
+            self.write(launcher, "import runpy\n"
+                       "runpy.run_module('scripts.edge_estimation.final_study.run', run_name='__main__')\n")
         self.outside = self.root / "outside"
         self.outside.mkdir()
         self.spooled = self.root / "var/spool/slurmd/job987654/slurm_script"
@@ -91,6 +98,7 @@ class SlurmWrapperTest(unittest.TestCase):
         for arg in ("--ntasks=1", "--cpus-per-task=1", "--cpu-bind=cores"):
             self.assertIn(arg, args)
         self.assertTrue(any(arg.startswith("--chdir=") for arg in args))
+        self.assertIn("scripts.edge_estimation.final_study.affinity", args)
 
     def test_spooled_worker_uses_explicit_repo(self):
         self.env["REPO"] = self.repo.as_posix()
